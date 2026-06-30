@@ -72,3 +72,10 @@ vpk pack --packId Poe2PriceGui --packVersion 1.0.2 --packDir .\publish --mainExe
 | ![查价器-道具](image/pirce1.png) | ![查价器-价格](image/price2.png) | ![查价器-道具提示](image/item-tip.png) |
 
 ---
+
+## ⭐ Star 历史
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=john-worker/Poe2PriceGui&type=Date&theme=dark" />
+  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=john-worker/Poe2PriceGui&type=Date" />
+  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=john-worker/Poe2PriceGui&type=Date" />
+</picture>
