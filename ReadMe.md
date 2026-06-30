@@ -36,8 +36,8 @@ v1.0.0
 | :---: | :---: | :---: |
 | ![软件主界面](image/image.png) | ![工具箱-补丁](image/tools.png) | ![游戏效果](image/game.png) |
 
-| 查价器-道具 | 查价器-价格 |
-| :---: | :---: |
-| ![查价器-道具](image/pirce1.png) | ![查价器-价格](image/price2.png) |
+| 查价器-道具 | 查价器-价格 | 查价器-道具提示 |
+| :---: | :---: | :---: |
+| ![查价器-道具](image/pirce1.png) | ![查价器-价格](image/price2.png) | ![查价器-道具提示](image/item-tip.png) |
 
 ---
