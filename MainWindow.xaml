@@ -409,6 +409,16 @@
                                     ToolTip="从 GitHub Releases 检查是否有新版本"/>
                         </StackPanel>
                     </GroupBox>
+
+                    <GroupBox Grid.Row="2" Header="手动更新（无法访问 GitHub 时使用）" Margin="0,15,0,0">
+                        <StackPanel Orientation="Vertical" Margin="10">
+                            <TextBlock Text="如果无法访问 GitHub 或自动更新失败，请按以下步骤手动更新：" Foreground="Gray" Margin="0,0,0,8"/>
+                            <TextBlock Text="1. 从 QQ 群文件下载最新的安装包（Poe2PriceGui-win-Setup.exe）"
+                                       Foreground="Gray" Margin="10,0,0,4"/>
+                            <TextBlock Text="2. 直接运行安装包，会自动覆盖安装旧版本"
+                                       Foreground="Gray" Margin="10,0,0,8"/>
+                        </StackPanel>
+                    </GroupBox>
                 </Grid>
             </TabItem>
 
