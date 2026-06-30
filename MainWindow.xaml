@@ -385,6 +385,36 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- 软件更新页 -->
+            <TabItem Header="软件更新" Tag="🔄">
+                <Grid Margin="14" Background="White">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="软件更新" FontSize="20" FontWeight="Bold" Margin="0,0,0,20"/>
+
+                    <GroupBox Grid.Row="1" Header="版本信息">
+                        <StackPanel Orientation="Vertical" Margin="10">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <TextBlock Text="当前版本：v" VerticalAlignment="Center" FontSize="14" Foreground="Gray"/>
+                                <TextBlock Text="{Binding AppVersion}" VerticalAlignment="Center" FontWeight="Bold" FontSize="14"/>
+                            </StackPanel>
+                            <TextBlock Text="点击「检查更新」从 GitHub Releases 检查是否有新版本。发现新版本时可下载并自动安装，安装完成后应用将自动重启。软件使用GitHub Release更新，可能需要科学上网！"
+                                       Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                            <Button Content="🔄 检查更新"
+                                    Command="{Binding CheckForUpdateCommand}"
+                                    Padding="18,8" Margin="0,0,10,0"
+                                    FontSize="14"
+                                    HorizontalAlignment="Left"
+                                    ToolTip="从 GitHub Releases 检查是否有新版本"/>
+                        </StackPanel>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+
             <!-- BUG反馈页 -->
             <TabItem Header="BUG反馈" Tag="🐛">
                 <Grid Margin="14" Background="White">

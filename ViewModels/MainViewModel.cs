@@ -28,6 +28,7 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly PatchInstaller _patchInstaller;
     private readonly HttpClient _httpClient;
     private readonly PoeTradeService _tradeService;
+    private readonly UpdateService _updateService;
     private AppSettings _settings;
     private CancellationTokenSource? _autoSaveDebounceCts;
     private ObservableCollection<PoecurrencyItem> _prices = [];
@@ -60,6 +61,7 @@ public class MainViewModel : INotifyPropertyChanged
         _settingsService = new SettingsService();
         _patchExportService = new PatchExportService();
         _patchInstaller = new PatchInstaller(_patchExportService);
+        _updateService = new UpdateService();
         _settings = _settingsService.Load();
         _priceCheckerEnabled = _settings.PriceCheckerEnabled;
         _priceCheckerHotkey = _settings.PriceCheckerHotkey;
@@ -82,6 +84,7 @@ public class MainViewModel : INotifyPropertyChanged
         OpenPriceCheckerLoginCommand = new RelayCommand(OpenPriceCheckerLoginBrowser);
         CaptureHotkeyCommand = new RelayCommand(CaptureHotkey);
         TestPriceCheckerCommand = new RelayCommand(async () => await TestPriceCheckerAsync(), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
+        CheckForUpdateCommand = new RelayCommand(async () => await CheckForUpdateAsync(), () => !IsBusy);
 
         _filteredPrices.Filter = FilterBySelectedCategory;
 
@@ -190,6 +193,7 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand OpenPriceCheckerLoginCommand { get; }
     public ICommand CaptureHotkeyCommand { get; }
     public ICommand TestPriceCheckerCommand { get; }
+    public ICommand CheckForUpdateCommand { get; }
 
     /// <summary>
     /// 状态栏消息。设置页缓存清理状态文本。
@@ -852,6 +856,79 @@ public class MainViewModel : INotifyPropertyChanged
     {
         get => _settingsStatusMessage;
         set => SetProperty(ref _settingsStatusMessage, value);
+    }
+
+    /// <summary>
+    /// 当前应用版本号。
+    /// </summary>
+    public string AppVersion => _updateService.CurrentVersion;
+
+    /// <summary>
+    /// 检查 GitHub Releases 是否有新版本。
+    /// </summary>
+    public async Task CheckForUpdateAsync()
+    {
+        IsBusy = true;
+        SettingsStatusMessage = "正在检查更新...";
+
+        try
+        {
+            var updateInfo = await _updateService.CheckForUpdatesAsync();
+
+            if (updateInfo == null)
+            {
+                SettingsStatusMessage = $"当前已是最新版本（v{AppVersion}）";
+                _toastService.ShowInfo($"当前已是最新版本（v{AppVersion}）");
+                return;
+            }
+
+            var newVersion = updateInfo.TargetFullRelease.Version;
+            AppLogger.Instance.Info($"发现新版本：{newVersion}");
+
+            // 询问用户是否下载并安装更新。
+            var result = MessageBox.Show(
+                $"发现新版本 v{newVersion}！\n当前版本：v{AppVersion}\n\n是否立即下载并安装更新？",
+                "发现新版本",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes)
+            {
+                SettingsStatusMessage = "已跳过本次更新";
+                return;
+            }
+
+            // 下载更新包。
+            SettingsStatusMessage = $"正在下载更新 v{newVersion}...";
+            var downloaded = await _updateService.DownloadUpdatesAsync(updateInfo, progressPercent =>
+            {
+                SettingsStatusMessage = $"正在下载更新... {progressPercent}%";
+            });
+
+            if (!downloaded)
+            {
+                SettingsStatusMessage = "更新下载失败，请稍后重试";
+                _toastService.ShowError("更新下载失败，请稍后重试");
+                return;
+            }
+
+            SettingsStatusMessage = "更新下载完成，即将重启并安装...";
+            _toastService.ShowSuccess("更新下载完成，即将重启并安装");
+
+            // 短暂延迟让用户看到提示，然后应用更新并重启。
+            await Task.Delay(1500);
+            _updateService.ApplyUpdatesAndRestart(updateInfo);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Error(ex, "检查更新失败");
+            SettingsStatusMessage = $"检查更新失败：{ex.Message}";
+            _toastService.ShowError($"检查更新失败：{ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     /// <summary>

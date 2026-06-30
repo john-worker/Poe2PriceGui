@@ -29,6 +29,9 @@ BUG反馈可以加QQ群反馈: 1001850913
 
 ## 更新日志
 ```
+v1.0.2
+1.添加自动更新功能,使用Github Releases更新。
+
 v1.0.1
 1.添加除github外的BUG反馈途径。
 2.优化readme，添加简易使用方式。
@@ -44,7 +47,16 @@ v1.0.0
 
 ## 打包命令
 ```
-dotnet publish -c Release -r win-x64 --self-contained true -p:DebugType=none -p:DebugSymbols=false
+old:    dotnet publish -c Release -r win-x64 --self-contained true -p:DebugType=none -p:DebugSymbols=false
+
+new:
+1. 安装 vpk CLI 工具（仅需一次）
+dotnet tool install -g vpk
+2. 发布应用
+dotnet publish Poe2PriceGui.csproj -c Release --self-contained -r win-x64 -o .\publish
+3. 用 vpk 打包 Velopack 发布包
+vpk pack --packId Poe2PriceGui --packVersion 1.0.2 --packDir .\publish --mainExe Poe2PriceGui.exe
+
 ```
 
 
