@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Navigation;
 using Poe2PriceGui.Services;
 using Poe2PriceGui.ViewModels;
@@ -52,5 +54,42 @@ public partial class MainWindow : Window
             AppLogger.Instance.Error(ex, "打开链接失败");
         }
         e.Handled = true;
+    }
+
+    private void OpenQQGroup_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("https://qm.qq.com/q/2OGbgG0z6w") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Error(ex, "打开 QQ 群链接失败");
+            MessageBox.Show("打开链接失败，请手动访问：https://qm.qq.com/q/2OGbgG0z6w", "提示");
+        }
+    }
+
+    private void CopyQQGroupNumber_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn) return;
+        var originalContent = btn.Content;
+
+        try
+        {
+            // 不保留模式：不阻塞、不需独占剪贴板，几乎不会失败
+            Clipboard.SetDataObject("1001850913", false);
+            btn.Content = "✓ 已复制";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Error(ex, "复制 QQ 群号失败");
+            btn.Content = "✗ 失败，请手输";
+        }
+
+        // 1.5 秒后恢复按钮文字（异步，不阻塞 UI）
+        Task.Delay(1500).ContinueWith(_ =>
+        {
+            Dispatcher.Invoke(() => btn.Content = originalContent);
+        });
     }
 }

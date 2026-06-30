@@ -384,6 +384,41 @@
                 </Grid>
                 </ScrollViewer>
             </TabItem>
+
+            <!-- BUG反馈页 -->
+            <TabItem Header="BUG反馈" Tag="🐛">
+                <Grid Margin="14" Background="White">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="BUG 反馈" FontSize="20" FontWeight="Bold" Margin="0,0,0,20"/>
+
+                    <StackPanel Grid.Row="1" Margin="0,0,0,25">
+                        <TextBlock Text="遇到问题或有建议？点击下方按钮加入 QQ 群进行反馈："
+                                   TextWrapping="Wrap" Margin="0,0,0,12" FontSize="13" Foreground="Gray"/>
+                        <Button Content="🐛 加入 QQ 群反馈" Padding="18,8" HorizontalAlignment="Left"
+                                FontSize="14" Cursor="Hand"
+                                Click="OpenQQGroup_Click"
+                                ToolTip="点击打开 QQ 群加入页面"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="QQ 群：" VerticalAlignment="Center" FontSize="13"/>
+                        <Button Content="1001850913"
+                                Click="CopyQQGroupNumber_Click"
+                                Background="Transparent" BorderThickness="0"
+                                Foreground="#FF1E6FFF" FontWeight="Bold" FontSize="13"
+                                Cursor="Hand" VerticalAlignment="Center"
+                                ToolTip="点击复制群号"/>
+                        <TextBlock Text="（点击数字自动复制）" VerticalAlignment="Center"
+                                   FontSize="11" Foreground="Gray" Margin="8,0,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
         </TabControl>
 
         <!-- 右上角 Toast 通知面板 -->
