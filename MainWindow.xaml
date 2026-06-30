@@ -279,7 +279,6 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="设置" FontSize="20" FontWeight="Bold" Margin="0,0,0,20"/>
@@ -379,8 +378,6 @@
                             <TextBlock Text="填写 Token 后使用 summary_validate 接口获取数据，数据更稳定可靠。" Foreground="Gray" TextWrapping="Wrap" FontSize="11"/>
                         </StackPanel>
                     </GroupBox>
-
-                    <TextBlock Grid.Row="7" Text="{Binding SettingsStatusMessage}" Foreground="DarkGreen" Margin="0,15,0,0" TextWrapping="Wrap"/>
                 </Grid>
                 </ScrollViewer>
             </TabItem>

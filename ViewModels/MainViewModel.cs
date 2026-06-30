@@ -751,7 +751,7 @@ public class MainViewModel : INotifyPropertyChanged
     {
         try
         {
-            var window = new LoginBrowserWindow
+            var window = new LoginBrowserWindow(PriceCheckerPoeSessionId)
             {
                 Owner = Application.Current.MainWindow,
             };
