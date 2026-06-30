@@ -47,7 +47,8 @@ v1.0.0
 
 ## 打包命令
 ```
-old:    dotnet publish -c Release -r win-x64 --self-contained true -p:DebugType=none -p:DebugSymbols=false
+old:
+dotnet publish -c Release -r win-x64 --self-contained true -p:DebugType=none -p:DebugSymbols=false
 
 new:
 1. 安装 vpk CLI 工具（仅需一次）
