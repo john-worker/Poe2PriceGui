@@ -1,0 +1,417 @@
+<Window x:Class="Poe2PriceGui.Windows.PriceOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="clr-namespace:Poe2PriceGui.Converters"
+        Title="PriceOverlay"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        SizeToContent="WidthAndHeight"
+        MinWidth="340"
+        MaxWidth="420"
+        Focusable="True">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:RarityColorConverter x:Key="RarityColorConverter"/>
+        <conv:NonEmptyToVisibilityConverter x:Key="NonEmptyToVisConverter"/>
+        <conv:NonZeroToVisibilityConverter x:Key="NonZeroToVisConverter"/>
+        <conv:StringJoinConverter x:Key="StringJoinConverter"/>
+        <Style x:Key="LinkButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#FF4A90D9"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#FFCC4444"/>
+                    <Setter Property="Cursor" Value="Arrow"/>
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="#FF6BB0FF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#FF4A90D9"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#FF2A2A3E"/>
+                    <Setter Property="Foreground" Value="#FF666678"/>
+                    <Setter Property="Cursor" Value="Arrow"/>
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FF5BA0F0"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="#EE1A1A2E"
+            BorderBrush="#FF4A90D9"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="0">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 标题栏 -->
+            <Grid Grid.Row="0" Background="#FF2A2A4E" Height="36">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="{Binding ItemInfo.Name}"
+                           FontSize="13"
+                           FontWeight="Bold"
+                           Foreground="White"
+                           VerticalAlignment="Center"
+                           Margin="12,0,0,0"
+                           TextTrimming="CharacterEllipsis"/>
+                <Button Grid.Column="1"
+                        Command="{Binding CloseCommand}"
+                        Width="32" Height="32"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Foreground="#FFCCCCCC"
+                        FontSize="16"
+                        FontWeight="Bold"
+                        Content="✕"
+                        Cursor="Hand"
+                        ToolTip="关闭 (Esc)"/>
+            </Grid>
+
+            <!-- 配置模式：选择搜索字段 -->
+            <StackPanel Grid.Row="1"
+                        Margin="16,12"
+                        Visibility="{Binding IsConfigMode, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="基本属性"
+                           FontSize="12"
+                           Foreground="#FF9999AA"
+                           Margin="0,0,0,6"/>
+
+                <ItemsControl ItemsSource="{Binding SearchFields}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <CheckBox Grid.Column="0"
+                                          IsChecked="{Binding IsSelected}"
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,8,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Label}"
+                                               Foreground="#FFCCCCCC"
+                                               FontSize="12"
+                                               MinWidth="60"/>
+                                    <TextBlock Text="{Binding Value}"
+                                               Foreground="#FFFFD700"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 词缀区域 -->
+                <TextBlock Text="词缀 / 属性"
+                           FontSize="12"
+                           Foreground="#FF9999AA"
+                           Margin="0,12,0,6"
+                           Visibility="{Binding HasMods, Converter={StaticResource BoolToVis}}"/>
+
+                <ItemsControl ItemsSource="{Binding ItemInfo.Mods}"
+                              Visibility="{Binding HasMods, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <CheckBox Grid.Column="0"
+                                          IsChecked="{Binding IsSelected}"
+                                          VerticalAlignment="Top"
+                                          Margin="0,0,8,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="{Binding Type}"
+                                               FontSize="10"
+                                               Foreground="#FF6A6AAA"
+                                               Margin="0,0,0,1"/>
+                                    <TextBlock Text="{Binding Text}"
+                                               Foreground="#FFCCCCCC"
+                                               FontSize="12"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 搜索按钮 + 精确搜索开关 -->
+                <Grid Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Button Content="🔍 搜索"
+                            Grid.Column="0"
+                            Command="{Binding SearchCommand}"
+                            IsEnabled="{Binding CanSearch}"
+                            Style="{StaticResource PrimaryButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            Height="34"
+                            FontSize="13"
+                            FontWeight="Bold"/>
+
+                    <CheckBox Content="精确数值"
+                              Grid.Column="1"
+                              IsChecked="{Binding IsExactSearch}"
+                              VerticalAlignment="Center"
+                              Margin="8,0,0,0"
+                              Foreground="#FFCCCCCC"
+                              FontSize="11"
+                              ToolTip="勾选后按词缀的具体数值过滤搜索结果"/>
+                </Grid>
+
+                <TextBlock Text="搜索中..."
+                           FontSize="11"
+                           Foreground="#FF4A90D9"
+                           HorizontalAlignment="Center"
+                           Margin="0,6,0,0"
+                           Visibility="{Binding IsSearching, Converter={StaticResource BoolToVis}}"/>
+            </StackPanel>
+
+            <!-- 结果模式：显示价格列表 -->
+            <StackPanel Grid.Row="1"
+                        Margin="16,12"
+                        Visibility="{Binding IsResultsMode, Converter={StaticResource BoolToVis}}">
+                <!-- 错误信息 -->
+                <TextBlock Text="{Binding ErrorMessage}"
+                           FontSize="12"
+                           Foreground="#FFFF6B6B"
+                           TextWrapping="Wrap"
+                           Margin="0,0,0,8"
+                           Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}"/>
+
+                <!-- 结果摘要 -->
+                <TextBlock Text="{Binding ResultSummary}"
+                           FontSize="11"
+                           Foreground="#FF9999AA"
+                           TextWrapping="Wrap"
+                           Margin="0,0,0,8"
+                           Visibility="{Binding HasNoError, Converter={StaticResource BoolToVis}}"/>
+
+                <!-- 价格列表 -->
+                <ScrollViewer MaxHeight="300"
+                              VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding HasNoError, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl ItemsSource="{Binding Listings}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#22FFFFFF"
+                                        CornerRadius="4"
+                                        Padding="8,4"
+                                        Margin="0,2">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <!-- 眼睛图标：悬停显示物品详情 -->
+                                        <TextBlock Grid.Column="0"
+                                                   Text="👁"
+                                                   FontSize="14"
+                                                   Foreground="#FF88CCFF"
+                                                   Cursor="Hand"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,8,0"
+                                                   ToolTipService.InitialShowDelay="0"
+                                                   ToolTipService.ShowDuration="60000">
+                                            <TextBlock.ToolTip>
+                                                <ToolTip Background="#FF0F0F1A"
+                                                         BorderBrush="#FF4A4A5E"
+                                                         BorderThickness="1"
+                                                         Padding="10,8"
+                                                         MaxWidth="380">
+                                                    <StackPanel>
+                                                        <!-- 物品名称 -->
+                                                        <TextBlock Text="{Binding ItemDetail.Name}"
+                                                                   FontSize="14"
+                                                                   FontWeight="Bold"
+                                                                   Foreground="{Binding ItemDetail.IsUnique, Converter={StaticResource RarityColorConverter}}"
+                                                                   TextWrapping="Wrap"
+                                                                   TextAlignment="Center"
+                                                                   Visibility="{Binding ItemDetail.Name, Converter={StaticResource NonEmptyToVisConverter}}"/>
+                                                        <!-- 基底类型 -->
+                                                        <TextBlock Text="{Binding ItemDetail.TypeLine}"
+                                                                   FontSize="13"
+                                                                   Foreground="{Binding ItemDetail.IsUnique, Converter={StaticResource RarityColorConverter}}"
+                                                                   TextWrapping="Wrap"
+                                                                   TextAlignment="Center"
+                                                                   Margin="0,1,0,0"
+                                                                   Visibility="{Binding ItemDetail.TypeLine, Converter={StaticResource NonEmptyToVisConverter}}"/>
+
+                                                        <!-- 属性区 -->
+                                                        <ItemsControl ItemsSource="{Binding ItemDetail.Properties}"
+                                                                      Margin="0,4,0,0">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding}"
+                                                                               FontSize="12"
+                                                                               Foreground="#FFCCCCCC"
+                                                                               TextWrapping="Wrap"
+                                                                               TextAlignment="Center"/>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                        <!-- 分隔线 + 物品等级/需求 -->
+                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.ItemLevel, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <TextBlock FontSize="12" Foreground="#FFCCCCCC" TextAlignment="Center" Visibility="{Binding ItemDetail.ItemLevel, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <Run Text="物品等级: "/><Run Text="{Binding ItemDetail.ItemLevel}" Foreground="#FFFFFFFF"/>
+                                                        </TextBlock>
+                                                        <TextBlock FontSize="12" Foreground="#FFCCCCCC" TextAlignment="Center" Margin="0,1,0,0" Visibility="{Binding ItemDetail.Requirements.Count, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <Run Text="需求: "/><Run Text="{Binding ItemDetail.Requirements, Converter={StaticResource StringJoinConverter}}"/>
+                                                        </TextBlock>
+                                                        <TextBlock FontSize="12" Foreground="#FFCCCCCC" TextAlignment="Center" Margin="0,1,0,0" Visibility="{Binding ItemDetail.Sockets, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <Run Text="插槽: "/><Run Text="{Binding ItemDetail.Sockets}" Foreground="#FFFFFFFF"/>
+                                                        </TextBlock>
+
+                                                        <!-- 隐式属性 -->
+                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.ImplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <ItemsControl ItemsSource="{Binding ItemDetail.ImplicitMods}" Visibility="{Binding ItemDetail.ImplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FF9999FF" TextWrapping="Wrap" TextAlignment="Center"/>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                        <!-- 显式属性 -->
+                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.ExplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <ItemsControl ItemsSource="{Binding ItemDetail.ExplicitMods}" Visibility="{Binding ItemDetail.ExplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FF8888FF" TextWrapping="Wrap" TextAlignment="Center"/>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                        <!-- 打造属性 -->
+                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.CraftedMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <ItemsControl ItemsSource="{Binding ItemDetail.CraftedMods}" Visibility="{Binding ItemDetail.CraftedMods.Count, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FFB4B4FF" TextWrapping="Wrap" TextAlignment="Center"/>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                        <!-- 已腐化 -->
+                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.Corrupted, Converter={StaticResource BoolToVis}}"/>
+                                                        <TextBlock Text="已腐化" FontSize="12" Foreground="#FFFF6B6B" TextAlignment="Center" Visibility="{Binding ItemDetail.Corrupted, Converter={StaticResource BoolToVis}}"/>
+
+                                                        <!-- 价格 -->
+                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.PriceText, Converter={StaticResource NonEmptyToVisConverter}}"/>
+                                                        <TextBlock Text="{Binding ItemDetail.PriceText}" FontSize="13" Foreground="#FFFFD700" FontWeight="SemiBold" TextAlignment="Center" Visibility="{Binding ItemDetail.PriceText, Converter={StaticResource NonEmptyToVisConverter}}"/>
+                                                    </StackPanel>
+                                                </ToolTip>
+                                            </TextBlock.ToolTip>
+                                        </TextBlock>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding DisplayPrice}"
+                                                   Foreground="#FFFFAA00"
+                                                   FontSize="13"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding StashName}"
+                                                   Foreground="#FF888899"
+                                                   FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   MaxWidth="140"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- 翻页控制 -->
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Margin="0,8,0,0"
+                            Visibility="{Binding HasPagination, Converter={StaticResource BoolToVis}}">
+                    <Button Content="← 上一页"
+                            Command="{Binding PrevPageCommand}"
+                            Style="{StaticResource LinkButtonStyle}"
+                            Height="26"
+                            Padding="12,0"
+                            FontSize="11"/>
+                    <TextBlock Text="{Binding PageInfo}"
+                               VerticalAlignment="Center"
+                               Margin="12,0"
+                               FontSize="11"
+                               Foreground="#FF888888"/>
+                    <Button Content="下一页 →"
+                            Command="{Binding NextPageCommand}"
+                            Style="{StaticResource LinkButtonStyle}"
+                            Height="26"
+                            Padding="12,0"
+                            FontSize="11"/>
+                </StackPanel>
+
+                <!-- 返回按钮 -->
+                <Button Content="← 返回修改条件"
+                        Command="{Binding BackCommand}"
+                        Style="{StaticResource LinkButtonStyle}"
+                        HorizontalAlignment="Left"
+                        Height="28"
+                        Margin="0,10,0,0"
+                        FontSize="11"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

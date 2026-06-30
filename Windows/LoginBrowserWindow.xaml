@@ -1,0 +1,33 @@
+<Window x:Class="Poe2PriceGui.Windows.LoginBrowserWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        mc:Ignorable="d"
+        Title="登录国服市集并获取 POESESSID" Height="700" Width="1100"
+        WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#FFF0F0F0" Padding="10" BorderBrush="#FFCCCCCC" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Vertical">
+                <TextBlock Text="1. 在下方浏览器中登录 poe.game.qq.com（QQ 或账号登录）&#x0A;2. 确认页面右上角已显示你的账号名后，点击下方按钮获取 POESESSID"
+                           Foreground="#FF333333" TextWrapping="Wrap"/>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button x:Name="ConfirmLoginButton"
+                            Content="我已完成登录，获取 POESESSID"
+                            Padding="15,6"
+                            Click="ConfirmLoginButton_Click"
+                            IsEnabled="False"/>
+                    <TextBlock x:Name="StatusText" Text="" VerticalAlignment="Center" Margin="15,0,0,0" FontWeight="Bold"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <wv2:WebView2 x:Name="WebView" Grid.Row="1"/>
+    </Grid>
+</Window>
