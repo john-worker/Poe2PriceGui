@@ -3,6 +3,9 @@
 POE2 物价补丁GUI版本: 为《Path of Exile 2》国服自动抓取通货物价，查询装备价值工具
 
 注: 本工具仅用于学习和研究，不涉及任何商业用途，目前只支持国服(Wegame)。
+
+工具目前还是一个Alpha版本，可能会有bug和不完善的地方。
+有什么问题可以加QQ群反馈: 1001850913
 ```
 价格补丁部分参考自开源项目 [weixiao030/poe2_price](https://github.com/weixiao030/poe2_price)，在此致谢。
 
