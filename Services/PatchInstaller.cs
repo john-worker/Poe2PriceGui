@@ -44,9 +44,9 @@ public class PatchInstaller
     }
 
     /// <summary>
-    /// 还原原始备份文件（.original 或 .zip）。
+    /// 还原原始备份文件（ggpk_restore.zip / bundles2_backup.zip / .original）。
     /// </summary>
-    public Task<InstallResult> RestoreLatestBackupAsync(string gameDirectory, CancellationToken cancellationToken = default)
+    public async Task<InstallResult> RestoreLatestBackupAsync(string gameDirectory, CancellationToken cancellationToken = default)
     {
         var result = new InstallResult();
 
@@ -54,7 +54,7 @@ public class PatchInstaller
         if (!modeInfo.IsValid)
         {
             result.ErrorMessage = modeInfo.ErrorMessage;
-            return Task.FromResult(result);
+            return result;
         }
 
         var backupDir = Path.Combine(_exportService.OutputDirectory, "backup");
@@ -62,29 +62,47 @@ public class PatchInstaller
         if (modeInfo.Mode == GameMode.GGPK)
         {
             var targetFile = Path.Combine(gameDirectory, "Content.ggpk");
-            var backupFile = Path.Combine(backupDir, "Content.ggpk.original");
+            var restoreZip = Path.Combine(backupDir, "ggpk_restore.zip");
 
-            if (!File.Exists(backupFile))
+            // 优先从还原 zip 还原（仅几 MB），兼容旧版 Content.ggpk.original（100GB 完整复制）。
+            if (File.Exists(restoreZip))
             {
-                result.ErrorMessage = $"未找到原始备份文件：{backupFile}";
-                return Task.FromResult(result);
+                if (!TryResolveToolPaths(out var tools, out var toolError))
+                {
+                    result.ErrorMessage = toolError;
+                    return result;
+                }
+                var restoreResult = await RestoreGgpkFromZipAsync(gameDirectory, restoreZip, tools, modeInfo, cancellationToken);
+                if (!restoreResult.Success)
+                {
+                    return restoreResult;
+                }
+                AppLogger.Instance.Info($"从还原包还原：{restoreZip} -> {targetFile}");
+                return restoreResult;
+            }
+
+            var ggpkOldBackup = Path.Combine(backupDir, "Content.ggpk.original");
+            if (!File.Exists(ggpkOldBackup))
+            {
+                result.ErrorMessage = $"未找到 GGPK 还原包或原始备份文件：{restoreZip}";
+                return result;
             }
 
             try
             {
-                File.Copy(backupFile, targetFile, overwrite: true);
-                AppLogger.Instance.Info($"还原原始备份：{backupFile} -> {targetFile}");
+                File.Copy(ggpkOldBackup, targetFile, overwrite: true);
+                AppLogger.Instance.Info($"还原原始备份（旧格式）：{ggpkOldBackup} -> {targetFile}");
                 result.Success = true;
                 result.InstalledPath = targetFile;
                 result.GameMode = modeInfo.DisplayName;
-                result.BackupPath = backupFile;
+                result.BackupPath = ggpkOldBackup;
             }
             catch (Exception ex)
             {
                 AppLogger.Instance.Error(ex, "还原备份失败");
                 result.ErrorMessage = $"还原备份失败：{ex.Message}";
             }
-            return Task.FromResult(result);
+            return result;
         }
 
         // Bundles2 模式：优先从 ZIP 还原，兼容旧版 .original 文件
@@ -113,7 +131,7 @@ public class PatchInstaller
                 AppLogger.Instance.Error(ex, "从 ZIP 还原备份失败");
                 result.ErrorMessage = $"从 ZIP 还原备份失败：{ex.Message}";
             }
-            return Task.FromResult(result);
+            return result;
         }
 
         // 兼容旧版：仅还原 _.index.bin.original
@@ -135,11 +153,11 @@ public class PatchInstaller
                 AppLogger.Instance.Error(ex, "还原备份失败");
                 result.ErrorMessage = $"还原备份失败：{ex.Message}";
             }
-            return Task.FromResult(result);
+            return result;
         }
 
         result.ErrorMessage = $"未找到备份文件：{zipBackup} 或 {oldBackup}";
-        return Task.FromResult(result);
+        return result;
     }
 
     private async Task<InstallResult> BuildAndMaybeInstallAsync(
@@ -184,19 +202,35 @@ public class PatchInstaller
 
         if (modeInfo.Mode == GameMode.GGPK)
         {
-            var ggpkBackup = Path.Combine(backupDir, "Content.ggpk.original");
-            if (File.Exists(ggpkBackup))
+            // GGPK 模式：优先从 ggpk_restore.zip 还原（仅几 MB），兼容旧版 Content.ggpk.original（100GB 完整复制）。
+            var ggpkRestoreZip = Path.Combine(backupDir, "ggpk_restore.zip");
+            if (File.Exists(ggpkRestoreZip))
             {
-                progress?.Report("4/6 正在还原原始数据文件...");
-                try
+                progress?.Report("4/6 正在从还原包还原原始数据文件...");
+                var restoreResult = await RestoreGgpkFromZipAsync(gameDirectory, ggpkRestoreZip, tools, modeInfo, cancellationToken);
+                if (!restoreResult.Success)
                 {
-                    File.Copy(ggpkBackup, targetGameFile, overwrite: true);
-                    AppLogger.Instance.Info($"安装前还原原始备份：{ggpkBackup} -> {targetGameFile}");
-                }
-                catch (Exception ex)
-                {
-                    result.ErrorMessage = $"还原原始备份失败：{ex.Message}";
+                    result.ErrorMessage = restoreResult.ErrorMessage;
                     return result;
+                }
+                AppLogger.Instance.Info($"安装前从还原包还原：{ggpkRestoreZip}");
+            }
+            else
+            {
+                var ggpkOldBackup = Path.Combine(backupDir, "Content.ggpk.original");
+                if (File.Exists(ggpkOldBackup))
+                {
+                    progress?.Report("4/6 正在还原原始数据文件（旧格式完整备份）...");
+                    try
+                    {
+                        File.Copy(ggpkOldBackup, targetGameFile, overwrite: true);
+                        AppLogger.Instance.Info($"安装前还原原始备份（旧格式）：{ggpkOldBackup} -> {targetGameFile}");
+                    }
+                    catch (Exception ex)
+                    {
+                        result.ErrorMessage = $"还原原始备份失败：{ex.Message}";
+                        return result;
+                    }
                 }
             }
         }
@@ -262,15 +296,32 @@ public class PatchInstaller
         }
         else
         {
-            var ggpkBackup = Path.Combine(backupDir, "Content.ggpk.original");
-            if (!File.Exists(ggpkBackup))
+            // GGPK 模式：使用 GGPKExtractor 从 Content.ggpk 提取 datc64 到临时目录。
+            if (string.IsNullOrEmpty(tools.GgpkExtractor) || !File.Exists(tools.GgpkExtractor))
             {
-                progress?.Report("4/6 正在定位原始数据文件...");
+                result.ErrorMessage = $"国际服 GGPK 模式需要 GGPKExtractor.exe，未找到：{tools.GgpkExtractor}";
+                return result;
             }
-            sourceDat = Path.Combine(gameDirectory, modeInfo.BaseItemsPath);
-            if (!File.Exists(sourceDat))
+            progress?.Report("4/6 正在从 Content.ggpk 提取原始数据文件...");
+            var extracted = await ExtractFromGgpkAsync(gameDirectory, modeInfo.BaseItemsPath, tools.GgpkExtractor, cancellationToken);
+            if (!extracted.Success)
             {
-                result.ErrorMessage = $"未找到游戏数据文件：{sourceDat}";
+                result.ErrorMessage = extracted.ErrorMessage;
+                return result;
+            }
+            sourceDat = extracted.FilePath;
+
+            // 将提取的原始 datc64 打包成还原 zip（仅几 MB），避免备份整个 Content.ggpk（可达 100GB）。
+            // 还原时用 PatchBundledGGPK3 将这些干净条目写回 Content.ggpk。
+            var ggpkRestoreZip = Path.Combine(backupDir, "ggpk_restore.zip");
+            try
+            {
+                CreateGgpkRestoreZip(ggpkRestoreZip, sourceDat, modeInfo.BaseItemsPath);
+                AppLogger.Instance.Info($"已创建 GGPK 还原包：{ggpkRestoreZip}");
+            }
+            catch (Exception ex)
+            {
+                result.ErrorMessage = $"创建 GGPK 还原包失败：{ex.Message}";
                 return result;
             }
         }
@@ -327,31 +378,12 @@ public class PatchInstaller
         CancellationToken cancellationToken)
     {
         var ggpkPath = Path.Combine(gameDirectory, "Content.ggpk");
-        var backupDir = Path.Combine(_exportService.OutputDirectory, "backup");
-        Directory.CreateDirectory(backupDir);
-        // 使用固定文件名保存"原始"备份，只在首次安装时创建，避免备份已打补丁的文件导致无法还原。
+        // GGPK 模式不备份整个 Content.ggpk（可能高达 100GB），
+        // 还原包（ggpk_restore.zip，仅含 datc64 小文件）在 BuildAndMaybeInstallAsync 提取阶段已创建。
         var result = new InstallResult
         {
-            BackupPath = Path.Combine(backupDir, "Content.ggpk.original")
+            BackupPath = Path.Combine(_exportService.OutputDirectory, "backup", "ggpk_restore.zip")
         };
-
-        try
-        {
-            if (!File.Exists(result.BackupPath))
-            {
-                File.Copy(ggpkPath, result.BackupPath, overwrite: false);
-                AppLogger.Instance.Info($"备份原始 GGPK：{result.BackupPath}");
-            }
-            else
-            {
-                AppLogger.Instance.Info($"原始备份已存在，跳过备份：{result.BackupPath}");
-            }
-        }
-        catch (Exception ex)
-        {
-            result.ErrorMessage = $"备份 GGPK 失败：{ex.Message}";
-            return result;
-        }
 
         var psi = new ProcessStartInfo
         {
@@ -558,6 +590,158 @@ public class PatchInstaller
         return result;
     }
 
+    /// <summary>
+    /// GGPK 模式：调用 GGPKExtractor.exe 从 Content.ggpk 提取指定虚拟路径的文件到临时目录。
+    /// GGPKExtractor 参数：&lt;Content.ggpk&gt; &lt;输出目录&gt;，提取后保持内部路径结构。
+    /// </summary>
+    private async Task<ExtractionResult> ExtractFromGgpkAsync(
+        string gameDirectory,
+        string virtualPath,
+        string ggpkExtractor,
+        CancellationToken cancellationToken)
+    {
+        var result = new ExtractionResult();
+        var contentGgpk = Path.Combine(gameDirectory, "Content.ggpk");
+        if (!File.Exists(contentGgpk))
+        {
+            result.ErrorMessage = $"未找到 Content.ggpk：{contentGgpk}";
+            return result;
+        }
+
+        var outputDir = Path.Combine(_exportService.OutputDirectory, "extracted_ggpk");
+        Directory.CreateDirectory(outputDir);
+        // GGPKExtractor 保持内部路径结构，提取后文件位于 outputDir/<virtualPath>。
+        result.FilePath = Path.Combine(outputDir, virtualPath.Replace('/', Path.DirectorySeparatorChar));
+
+        // 若已提取且文件存在，先删除避免覆盖冲突。
+        if (File.Exists(result.FilePath))
+        {
+            try { File.Delete(result.FilePath); }
+            catch { /* 忽略删除失败，GGPKExtractor 会覆盖 */ }
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = ggpkExtractor,
+            Arguments = $"\"{contentGgpk}\" \"{outputDir}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        AppLogger.Instance.Info($"提取 GGPK 文件：{psi.FileName} {psi.Arguments}");
+        using var process = Process.Start(psi);
+        if (process == null)
+        {
+            result.ErrorMessage = "无法启动 GGPKExtractor 进程";
+            return result;
+        }
+
+        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var error = await process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+
+        LogProcessOutput(output, error);
+
+        if (process.ExitCode != 0)
+        {
+            result.ErrorMessage = $"GGPKExtractor 提取失败（退出码 {process.ExitCode}）：{error}";
+            return result;
+        }
+
+        if (!File.Exists(result.FilePath))
+        {
+            result.ErrorMessage = $"提取后文件不存在：{result.FilePath}，虚拟路径：{virtualPath}";
+            return result;
+        }
+
+        result.Success = true;
+        return result;
+    }
+
+    /// <summary>
+    /// 将提取的原始 datc64 打包成 GGPK 还原 zip。
+    /// zip 内条目名为游戏内虚拟路径（如 data/balance/baseitemtypes.datc64），
+    /// PatchBundledGGPK3 还原时按此路径写回 Content.ggpk。
+    /// </summary>
+    private static void CreateGgpkRestoreZip(string zipPath, string sourceDat, string virtualPath)
+    {
+        var dir = Path.GetDirectoryName(zipPath);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+        // 若已存在则覆盖，确保还原包始终对应最新提取的干净数据。
+        if (File.Exists(zipPath))
+        {
+            File.Delete(zipPath);
+        }
+        using var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create);
+        // 条目名使用 / 分隔符（GGPK 内部虚拟路径格式）。
+        archive.CreateEntryFromFile(sourceDat, virtualPath.Replace('\\', '/'), CompressionLevel.Optimal);
+    }
+
+    /// <summary>
+    /// 调用 PatchBundledGGPK3 将还原 zip 中的干净 datc64 条目写回 Content.ggpk。
+    /// 替代旧的 100GB 完整文件复制还原方式。
+    /// </summary>
+    private async Task<InstallResult> RestoreGgpkFromZipAsync(
+        string gameDirectory,
+        string restoreZip,
+        ToolPaths tools,
+        GameModeInfo modeInfo,
+        CancellationToken cancellationToken)
+    {
+        var ggpkPath = Path.Combine(gameDirectory, "Content.ggpk");
+        var result = new InstallResult
+        {
+            BackupPath = restoreZip,
+        };
+
+        if (!File.Exists(ggpkPath))
+        {
+            result.ErrorMessage = $"未找到 Content.ggpk：{ggpkPath}";
+            return result;
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"\"{tools.PatchBundledGgpk}\" \"{ggpkPath}\" \"{restoreZip}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        AppLogger.Instance.Info($"从还原包还原 GGPK：{psi.FileName} {psi.Arguments}");
+        using var process = Process.Start(psi);
+        if (process == null)
+        {
+            result.ErrorMessage = "无法启动 dotnet 进程（PatchBundledGGPK3）";
+            return result;
+        }
+
+        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var error = await process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+
+        LogProcessOutput(output, error);
+
+        if (process.ExitCode != 0)
+        {
+            result.ErrorMessage = $"GGPK 还原失败（退出码 {process.ExitCode}）：{error}";
+            return result;
+        }
+
+        result.Success = true;
+        result.InstalledPath = ggpkPath;
+        result.GameMode = modeInfo.DisplayName;
+        AppLogger.Instance.Info($"GGPK 还原完成：{ggpkPath}");
+        return result;
+    }
+
     private async Task<ScriptResult> RunPythonPatchScriptAsync(
         string scriptPath,
         string sourceDat,
@@ -654,6 +838,9 @@ public class PatchInstaller
             return false;
         }
 
+        // GGPKExtractor 为国际服 GGPK 模式专用，国服不需要，此处仅解析路径不强制检查。
+        tools.GgpkExtractor = ResolveToolPath("tools", "GGPKExtractor", "GGPKExtractor.exe");
+
         return true;
     }
 
@@ -716,6 +903,8 @@ public class PatchInstaller
         public string BundleExtractor { get; set; } = "";
         public string PatchBundle3 { get; set; } = "";
         public string PatchBundledGgpk { get; set; } = "";
+        /// <summary>GGPKExtractor.exe 路径，国际服 GGPK 模式下必需，国服可缺省。</summary>
+        public string GgpkExtractor { get; set; } = "";
     }
 
     private class ExtractionResult

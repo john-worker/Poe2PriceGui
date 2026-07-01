@@ -15,8 +15,6 @@
 
         <Border Grid.Row="0" Background="#FFF0F0F0" Padding="10" BorderBrush="#FFCCCCCC" BorderThickness="0,0,0,1">
             <StackPanel Orientation="Vertical">
-                <TextBlock Text="1. 在下方浏览器中登录 poe.game.qq.com（QQ 或账号登录）&#x0A;2. 确认页面右上角已显示你的账号名后，点击下方按钮获取 POESESSID"
-                           Foreground="#FF333333" TextWrapping="Wrap"/>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                     <Button x:Name="ConfirmLoginButton"
                             Content="我已完成登录，获取 POESESSID"

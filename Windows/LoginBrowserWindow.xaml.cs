@@ -6,19 +6,22 @@ using Poe2PriceGui.Services;
 namespace Poe2PriceGui.Windows;
 
 /// <summary>
-/// 内置浏览器窗口：用户登录国服市集后，手动点击按钮获取 POESESSID Cookie。
+/// 内置浏览器窗口：用户登录国服/国际服市集后，手动点击按钮获取 POESESSID Cookie。
 /// </summary>
 public partial class LoginBrowserWindow : Window
 {
     public string? CapturedPoeSessionId { get; private set; }
 
     private readonly string? _existingSessionId;
+    private readonly bool _isChina;
 
     /// <param name="existingSessionId">已保存的 POESESSID，打开时注入以恢复登录态。</param>
-    public LoginBrowserWindow(string? existingSessionId = null)
+    /// <param name="isChina">是否为国服，决定登录地址与 Cookie 域。</param>
+    public LoginBrowserWindow(string? existingSessionId = null, bool isChina = true)
     {
         InitializeComponent();
         _existingSessionId = existingSessionId;
+        _isChina = isChina;
         Loaded += OnLoaded;
     }
 
@@ -39,10 +42,11 @@ public partial class LoginBrowserWindow : Window
             // 每次打开浏览器时，从 settings.json 读取已保存的值并注入，恢复登录态。
             if (!string.IsNullOrWhiteSpace(_existingSessionId))
             {
+                var domain = _isChina ? ".poe.game.qq.com" : ".pathofexile.com";
                 var cookie = WebView.CoreWebView2.CookieManager.CreateCookie(
-                    "POESESSID", _existingSessionId, ".poe.game.qq.com", "/");
+                    "POESESSID", _existingSessionId, domain, "/");
                 WebView.CoreWebView2.CookieManager.AddOrUpdateCookie(cookie);
-                AppLogger.Instance.Info("已注入上次保存的 POESESSID，尝试恢复登录态");
+                AppLogger.Instance.Info($"已注入上次保存的 POESESSID（{_isChinaSwitchText}），尝试恢复登录态");
             }
         }
         catch (Exception ex)
@@ -70,8 +74,11 @@ public partial class LoginBrowserWindow : Window
             });
         };
 
-        WebView.CoreWebView2.Navigate("https://poe.game.qq.com/trade2");
+        var loginUrl = _isChina ? "https://poe.game.qq.com/trade2" : "https://www.pathofexile.com/trade2";
+        WebView.CoreWebView2.Navigate(loginUrl);
     }
+
+    private string _isChinaSwitchText => _isChina ? "国服" : "国际服";
 
     /// <summary>
     /// 手动按钮：用户确认已登录后主动检测 POESESSID。
@@ -80,7 +87,8 @@ public partial class LoginBrowserWindow : Window
     {
         try
         {
-            var cookies = await WebView.CoreWebView2.CookieManager.GetCookiesAsync("https://poe.game.qq.com");
+            var cookieUrl = _isChina ? "https://poe.game.qq.com" : "https://www.pathofexile.com";
+            var cookies = await WebView.CoreWebView2.CookieManager.GetCookiesAsync(cookieUrl);
             var sessionCookie = cookies.FirstOrDefault(c => c.Name == "POESESSID");
 
             if (sessionCookie == null || string.IsNullOrWhiteSpace(sessionCookie.Value))
@@ -91,7 +99,7 @@ public partial class LoginBrowserWindow : Window
             }
 
             CapturedPoeSessionId = sessionCookie.Value;
-            AppLogger.Instance.Info("成功获取 POESESSID（来源：手动点击）");
+            AppLogger.Instance.Info($"成功获取 POESESSID（{_isChinaSwitchText}，来源：手动点击）");
 
             StatusText.Text = "登录成功，正在关闭...";
             StatusText.Foreground = System.Windows.Media.Brushes.DarkGreen;

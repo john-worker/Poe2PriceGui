@@ -19,7 +19,6 @@ namespace Poe2PriceGui.ViewModels;
 /// </summary>
 public class MainViewModel : INotifyPropertyChanged
 {
-    private readonly PoecurrencyPriceService _priceService;
     private readonly IconCacheService _iconCacheService;
     private readonly PriceDataService _priceDataService;
     private readonly ToastService _toastService;
@@ -27,7 +26,6 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly PatchExportService _patchExportService;
     private readonly PatchInstaller _patchInstaller;
     private readonly HttpClient _httpClient;
-    private readonly PoeTradeService _tradeService;
     private readonly UpdateService _updateService;
     private AppSettings _settings;
     private CancellationTokenSource? _autoSaveDebounceCts;
@@ -49,27 +47,38 @@ public class MainViewModel : INotifyPropertyChanged
     private ListCollectionView _filteredPrices = new(new ObservableCollection<PoecurrencyItem>());
     private PriceOverlayWindow? _currentOverlay;
 
+    /// <summary>当前价格服务（国服/国际服切换）。</summary>
+    private IPriceService _priceService = null!;
+    /// <summary>交易搜索服务（国服/国际服切换）。</summary>
+    private PoeTradeService _tradeService = null!;
+    /// <summary>当前是否为国服。</summary>
+    private bool _isChinaServer = true;
+    /// <summary>价格页数据来源说明。</summary>
+    private string _priceDataSourceLabel = "poecurrency.top (国服)";
+
     public MainViewModel()
     {
         _httpClient = new HttpClient();
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "Poe2PriceGui/1.0");
-        _tradeService = new PoeTradeService(_httpClient);
-        _priceService = new PoecurrencyPriceService(_httpClient);
-        _iconCacheService = new IconCacheService(_httpClient);
-        _priceDataService = new PriceDataService();
-        _toastService = new ToastService();
         _settingsService = new SettingsService();
-        _patchExportService = new PatchExportService();
-        _patchInstaller = new PatchInstaller(_patchExportService);
-        _updateService = new UpdateService();
         _settings = _settingsService.Load();
         _priceCheckerEnabled = _settings.PriceCheckerEnabled;
         _priceCheckerHotkey = _settings.PriceCheckerHotkey;
         _priceCheckerPoeSessionId = _settings.PriceCheckerPoeSessionId;
         _priceCheckerLeague = _settings.PriceCheckerLeague;
         _currencyPriceToken = _settings.CurrencyPriceToken;
-        RefreshLastRefreshTimeDisplay();
+
+        // 先根据已保存的游戏目录检测区服，再创建对应的价格/交易服务。
         RefreshDetectedGameMode();
+        RebuildPriceAndTradeServices();
+
+        _iconCacheService = new IconCacheService(_httpClient);
+        _priceDataService = new PriceDataService();
+        _toastService = new ToastService();
+        _patchExportService = new PatchExportService();
+        _patchInstaller = new PatchInstaller(_patchExportService);
+        _updateService = new UpdateService();
+        RefreshLastRefreshTimeDisplay();
 
         RefreshCommand = new RelayCommand(async () => await RefreshPricesAsync(), () => !IsBusy);
         CleanCacheCommand = new RelayCommand(CleanCache, () => !IsBusy);
@@ -87,6 +96,7 @@ public class MainViewModel : INotifyPropertyChanged
         TestPriceCheckerCommand = new RelayCommand(async () => await TestPriceCheckerAsync(), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
         TestPriceCheckerQuiverCommand = new RelayCommand(async () => await TestPriceCheckerAsync("quiver"), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
         CheckForUpdateCommand = new RelayCommand(async () => await CheckForUpdateAsync(), () => !IsBusy);
+        ForceSwitchServerCommand = new RelayCommand(ForceSwitchServer, () => !IsBusy);
 
         _filteredPrices.Filter = FilterBySelectedCategory;
 
@@ -198,6 +208,7 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand TestPriceCheckerCommand { get; }
     public ICommand TestPriceCheckerQuiverCommand { get; }
     public ICommand CheckForUpdateCommand { get; }
+    public ICommand ForceSwitchServerCommand { get; }
 
     /// <summary>
     /// 状态栏消息。设置页缓存清理状态文本。
@@ -247,6 +258,29 @@ public class MainViewModel : INotifyPropertyChanged
         get => _detectedGameMode;
         set => SetProperty(ref _detectedGameMode, value);
     }
+
+    /// <summary>
+    /// 价格页标题，例如 "POE2 国服价格" 或 "POE2 国际服价格"。
+    /// </summary>
+    public string PricePageTitle => _isChinaServer ? "POE2 国服价格" : "POE2 国际服价格";
+
+    /// <summary>
+    /// 价格页数据来源说明，例如 "poecurrency.top (国服)"。
+    /// </summary>
+    public string PriceDataSourceLabel
+    {
+        get => _priceDataSourceLabel;
+        set
+        {
+            if (SetProperty(ref _priceDataSourceLabel, value))
+            {
+                OnPropertyChanged(nameof(PricePageTitle));
+            }
+        }
+    }
+
+    /// <summary>当前是否为国服。</summary>
+    public bool IsChinaServer => _isChinaServer;
 
     /// <summary>查价器是否启用。</summary>
     public bool PriceCheckerEnabled
@@ -332,6 +366,11 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 _settings.CurrencyPriceToken = value;
                 _settingsService.Save(_settings);
+                // 国服价格服务需要同步 Token。
+                if (_priceService is PoecurrencyPriceService cn)
+                {
+                    cn.Token = value;
+                }
             }
         }
     }
@@ -769,6 +808,79 @@ public class MainViewModel : INotifyPropertyChanged
     {
         var info = GameModeDetector.Detect(GameDirectory);
         DetectedGameMode = info.IsValid ? info.DisplayName : (string.IsNullOrWhiteSpace(info.ErrorMessage) ? "未检测" : info.ErrorMessage);
+
+        // 区服变化时重建价格/交易服务，并同步默认赛季。
+        var newIsChina = !info.IsValid || info.IsChina;
+        if (newIsChina != _isChinaServer)
+        {
+            _isChinaServer = newIsChina;
+            RebuildPriceAndTradeServices();
+
+            // 未自定义赛季时，切换区服自动更新默认赛季名。
+            var defaultLeague = newIsChina ? "奥杜尔秘符" : "Runes of Aldur";
+            if (string.IsNullOrWhiteSpace(PriceCheckerLeague) ||
+                PriceCheckerLeague == "奥杜尔秘符" ||
+                PriceCheckerLeague == "Runes of Aldur")
+            {
+                PriceCheckerLeague = defaultLeague;
+            }
+
+            PriceDataSourceLabel = _priceService.DataSourceLabel;
+            OnPropertyChanged(nameof(PricePageTitle));
+            OnPropertyChanged(nameof(IsChinaServer));
+            AppLogger.Instance.Info($"区服切换：IsChina={_isChinaServer}, DataSource={PriceDataSourceLabel}, League={PriceCheckerLeague}");
+        }
+    }
+
+    /// <summary>
+    /// 根据当前区服重建价格服务与交易搜索服务。
+    /// 国服：PoecurrencyPriceService + poe.game.qq.com 交易接口
+    /// 国际服：Poe2ScoutPriceService + www.pathofexile.com 交易接口
+    /// </summary>
+    private void RebuildPriceAndTradeServices()
+    {
+        if (_isChinaServer)
+        {
+            _priceService = new PoecurrencyPriceService(_httpClient)
+            {
+                Token = CurrencyPriceToken,
+            };
+            _tradeService = new PoeTradeService(_httpClient, isChina: true);
+        }
+        else
+        {
+            _priceService = new Poe2ScoutPriceService(_httpClient, league: "runes");
+            _tradeService = new PoeTradeService(_httpClient, isChina: false);
+        }
+
+        PriceDataSourceLabel = _priceService.DataSourceLabel;
+        OnPropertyChanged(nameof(PricePageTitle));
+        OnPropertyChanged(nameof(IsChinaServer));
+    }
+
+    /// <summary>
+    /// 调试用：强制切换国服/国际服模式，便于在未设置国际服游戏目录时测试国际服价格显示。
+    /// </summary>
+    private void ForceSwitchServer()
+    {
+        _isChinaServer = !_isChinaServer;
+        RebuildPriceAndTradeServices();
+
+        // 切换默认赛季（仅在为默认值时自动切换，避免覆盖用户自定义）。
+        var defaultCn = "奥杜尔秘符";
+        var defaultIntl = "Runes of Aldur";
+        if (_isChinaServer && (string.IsNullOrWhiteSpace(PriceCheckerLeague) || PriceCheckerLeague == defaultIntl))
+        {
+            PriceCheckerLeague = defaultCn;
+        }
+        else if (!_isChinaServer && (string.IsNullOrWhiteSpace(PriceCheckerLeague) || PriceCheckerLeague == defaultCn))
+        {
+            PriceCheckerLeague = defaultIntl;
+        }
+
+        var modeText = _isChinaServer ? "国服" : "国际服";
+        _toastService.ShowInfo($"已强制切换为{modeText}模式（调试）");
+        AppLogger.Instance.Info($"强制切换区服：IsChina={_isChinaServer}, DataSource={PriceDataSourceLabel}, League={PriceCheckerLeague}");
     }
 
     private void RefreshLastRefreshTimeDisplay()
@@ -806,7 +918,7 @@ public class MainViewModel : INotifyPropertyChanged
     {
         try
         {
-            var window = new LoginBrowserWindow(PriceCheckerPoeSessionId)
+            var window = new LoginBrowserWindow(PriceCheckerPoeSessionId, isChina: _isChinaServer)
             {
                 Owner = Application.Current.MainWindow,
             };
@@ -987,13 +1099,13 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 从 poecurrency.top 抓取最新价格。
+    /// 从当前价格源（国服 poecurrency.top / 国际服 poe2scout.com）抓取最新价格。
     /// </summary>
     public async Task RefreshPricesAsync()
     {
         IsBusy = true;
-        StatusMessage = "正在从 poecurrency.top 获取价格...";
-        AppLogger.Instance.Info("开始刷新价格...");
+        StatusMessage = $"正在从 {_priceService.DataSourceLabel} 获取价格...";
+        AppLogger.Instance.Info($"开始刷新价格，数据源：{_priceService.DataSourceLabel}");
 
         try
         {
@@ -1004,7 +1116,7 @@ public class MainViewModel : INotifyPropertyChanged
             var oldPriceMap = oldPrices.ToDictionary(p => p.ItemName, p => p.PriceExalted);
             AppLogger.Instance.Info($"读取本地旧数据 {oldPrices.Count} 条用于对比");
 
-            var pricesTask = _priceService.FetchPricesAsync(token: CurrencyPriceToken);
+            var pricesTask = _priceService.FetchPricesAsync();
             var mappingTask = _iconCacheService.LoadMappingAsync();
 
             await Task.WhenAll(pricesTask, mappingTask);
@@ -1167,6 +1279,23 @@ public class MainViewModel : INotifyPropertyChanged
                     return;
                 }
 
+                // 优先使用 IconUrl 直接加载（国际服 poe2scout 已返回 URL）。
+                if (!string.IsNullOrWhiteSpace(item.IconUrl))
+                {
+                    var icon = await _iconCacheService.GetIconByUrlAsync(item.IconUrl, cancellationToken);
+                    if (icon != null)
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() => item.IconImage = icon);
+                        Interlocked.Increment(ref loadedCount);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref missingCount);
+                    }
+                    return;
+                }
+
+                // 回退：通过物品名查 IconCacheService 映射表（国服 poecurrency.top）。
                 if (!_iconCacheService.HasIcon(item.ItemName))
                 {
                     AppLogger.Instance.Warn($"图标映射缺失：{item.ItemName}（分类：{item.CategoryLabel}）");
@@ -1174,10 +1303,10 @@ public class MainViewModel : INotifyPropertyChanged
                     return;
                 }
 
-                var icon = await _iconCacheService.GetIconAsync(item.ItemName, cancellationToken);
-                if (icon != null)
+                var namedIcon = await _iconCacheService.GetIconAsync(item.ItemName, cancellationToken);
+                if (namedIcon != null)
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(() => item.IconImage = icon);
+                    await Application.Current.Dispatcher.InvokeAsync(() => item.IconImage = namedIcon);
                     Interlocked.Increment(ref loadedCount);
                 }
                 else

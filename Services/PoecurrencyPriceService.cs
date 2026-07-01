@@ -9,15 +9,29 @@ namespace Poe2PriceGui.Services;
 /// 从 poecurrency.top 获取并归一化价格数据。
 /// 参考 build_poe2scout_price_patch.py 中的 normalize_poecurrency_summary 与价格选择逻辑。
 /// </summary>
-public class PoecurrencyPriceService
+public class PoecurrencyPriceService : IPriceService
 {
     private const string DefaultSummaryUrl = "https://poecurrency.top/api/summary?version=2";
     private const string ValidateSummaryUrlFormat = "https://poecurrency.top/api/summary_validate?token={0}&version=2";
     private readonly HttpClient _httpClient;
 
+    public string DataSourceLabel => "poecurrency.top (国服)";
+    public bool IsChina => true;
+
+    /// <summary>通货价格查询 Token，为空时使用公共 summary 接口，非空时使用 summary_validate 接口。</summary>
+    public string? Token { get; set; }
+
     public PoecurrencyPriceService(HttpClient httpClient)
     {
         _httpClient = httpClient;
+    }
+
+    /// <summary>
+    /// IPriceService 接口实现：使用 Token 属性拉取价格。
+    /// </summary>
+    Task<ObservableCollection<PoecurrencyItem>> IPriceService.FetchPricesAsync(CancellationToken cancellationToken)
+    {
+        return FetchPricesAsync(token: Token, cancellationToken: cancellationToken);
     }
 
     public async Task<ObservableCollection<PoecurrencyItem>> FetchPricesAsync(

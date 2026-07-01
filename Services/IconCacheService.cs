@@ -116,6 +116,52 @@ public class IconCacheService
     }
 
     /// <summary>
+    /// 直接通过图标 URL 加载图标，绕过物品名映射表。
+    /// 用于国际服等已有 IconUrl 但映射表中无中文名的场景。
+    /// 缓存文件名使用 URL 的 MD5 哈希。
+    /// </summary>
+    public async Task<BitmapImage?> GetIconByUrlAsync(string iconUrl, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(iconUrl))
+        {
+            return null;
+        }
+
+        var fileName = $"{Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(iconUrl)))}.png";
+        var localPath = Path.Combine(_cacheDirectory, "icons", fileName);
+
+        if (!File.Exists(localPath))
+        {
+            try
+            {
+                var directory = Path.GetDirectoryName(localPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                var bytes = await _httpClient.GetByteArrayAsync(iconUrl, cancellationToken);
+                await File.WriteAllBytesAsync(localPath, bytes, cancellationToken);
+                AppLogger.Instance.Info($"图标下载成功（按URL）：url={iconUrl}, localPath={localPath}");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Instance.Error(ex, $"图标下载失败（按URL）：url={iconUrl}");
+                return null;
+            }
+        }
+
+        try
+        {
+            return LoadBitmap(localPath);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Error(ex, $"图标加载失败（按URL）：localPath={localPath}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 获取指定道具名称的图标。如果本地缓存不存在则先下载。
     /// </summary>
     public async Task<BitmapImage?> GetIconAsync(string itemName, CancellationToken cancellationToken = default)

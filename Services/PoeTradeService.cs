@@ -9,16 +9,25 @@ using Poe2PriceGui.Models;
 namespace Poe2PriceGui.Services;
 
 /// <summary>
-/// 国服 POE2 市集交易接口服务。
+/// POE2 市集交易接口服务，支持国服与国际服切换。
+/// 国服：https://poe.game.qq.com/api/trade2
+/// 国际服：https://www.pathofexile.com/api/trade2
 /// </summary>
 public class PoeTradeService
 {
-    private const string BaseUrl = "https://poe.game.qq.com/api/trade2";
+    private const string ChinaBaseUrl = "https://poe.game.qq.com/api/trade2";
+    private const string IntlBaseUrl = "https://www.pathofexile.com/api/trade2";
     private const int MaxFetchIds = 10;
     private const int RequestDelayMs = 1200;
 
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _rateLimiter = new(1, 1);
+
+    /// <summary>当前使用的交易 API 根地址。</summary>
+    public string BaseUrl { get; set; }
+
+    /// <summary>是否为国服。</summary>
+    public bool IsChina { get; set; } = true;
 
     // 缓存的 stats 数据：key = 归一化文本，value = 该文本在所有分类下的 stat ID 列表（含分类前缀）。
     // 同一文本可能出现在多个分类中（如「所有元素抗性 +#」在 implicit 与 explicit 下都有），需保留全部以正确匹配。
@@ -34,9 +43,11 @@ public class PoeTradeService
     // 匹配连续的中文字符，用于关键词回退搜索。
     private static readonly Regex ChineseCharRegex = new(@"[\u4e00-\u9fff]+", RegexOptions.Compiled);
 
-    public PoeTradeService(HttpClient httpClient)
+    public PoeTradeService(HttpClient httpClient, bool isChina = true)
     {
         _httpClient = httpClient;
+        IsChina = isChina;
+        BaseUrl = isChina ? ChinaBaseUrl : IntlBaseUrl;
     }
 
     /// <summary>
@@ -832,12 +843,20 @@ public class PoeTradeService
         return text.Trim();
     }
 
-    private static void AddCommonHeaders(HttpRequestMessage request, string? sessionId)
+    private void AddCommonHeaders(HttpRequestMessage request, string? sessionId)
     {
         request.Headers.TryAddWithoutValidation("User-Agent", "Poe2PriceGui/1.0");
-        // 国服交易接口需要 Origin/Referer 头通过 CSRF 校验。
-        request.Headers.TryAddWithoutValidation("Origin", "https://poe.game.qq.com");
-        request.Headers.TryAddWithoutValidation("Referer", "https://poe.game.qq.com/trade2/search");
+        // 国服交易接口需要 Origin/Referer 头通过 CSRF 校验；国际服使用 pathofexile.com。
+        if (IsChina)
+        {
+            request.Headers.TryAddWithoutValidation("Origin", "https://poe.game.qq.com");
+            request.Headers.TryAddWithoutValidation("Referer", "https://poe.game.qq.com/trade2/search");
+        }
+        else
+        {
+            request.Headers.TryAddWithoutValidation("Origin", "https://www.pathofexile.com");
+            request.Headers.TryAddWithoutValidation("Referer", "https://www.pathofexile.com/trade2/search");
+        }
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             request.Headers.TryAddWithoutValidation("Cookie", $"POESESSID={sessionId}");
