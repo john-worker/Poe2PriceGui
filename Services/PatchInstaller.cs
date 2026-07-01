@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -43,7 +44,7 @@ public class PatchInstaller
     }
 
     /// <summary>
-    /// 还原原始备份文件（.original）。
+    /// 还原原始备份文件（.original 或 .zip）。
     /// </summary>
     public Task<InstallResult> RestoreLatestBackupAsync(string gameDirectory, CancellationToken cancellationToken = default)
     {
@@ -56,43 +57,88 @@ public class PatchInstaller
             return Task.FromResult(result);
         }
 
-        string targetFile;
-        string backupFileName;
+        var backupDir = Path.Combine(_exportService.OutputDirectory, "backup");
+
         if (modeInfo.Mode == GameMode.GGPK)
         {
-            targetFile = Path.Combine(gameDirectory, "Content.ggpk");
-            backupFileName = "Content.ggpk.original";
-        }
-        else
-        {
-            targetFile = Path.Combine(gameDirectory, "Bundles2", "_.index.bin");
-            backupFileName = "_.index.bin.original";
-        }
+            var targetFile = Path.Combine(gameDirectory, "Content.ggpk");
+            var backupFile = Path.Combine(backupDir, "Content.ggpk.original");
 
-        var backupDir = Path.Combine(_exportService.OutputDirectory, "backup");
-        var backupFile = Path.Combine(backupDir, backupFileName);
+            if (!File.Exists(backupFile))
+            {
+                result.ErrorMessage = $"未找到原始备份文件：{backupFile}";
+                return Task.FromResult(result);
+            }
 
-        if (!File.Exists(backupFile))
-        {
-            result.ErrorMessage = $"未找到原始备份文件：{backupFile}";
+            try
+            {
+                File.Copy(backupFile, targetFile, overwrite: true);
+                AppLogger.Instance.Info($"还原原始备份：{backupFile} -> {targetFile}");
+                result.Success = true;
+                result.InstalledPath = targetFile;
+                result.GameMode = modeInfo.DisplayName;
+                result.BackupPath = backupFile;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Instance.Error(ex, "还原备份失败");
+                result.ErrorMessage = $"还原备份失败：{ex.Message}";
+            }
             return Task.FromResult(result);
         }
 
-        try
+        // Bundles2 模式：优先从 ZIP 还原，兼容旧版 .original 文件
+        var zipBackup = Path.Combine(backupDir, "bundles2_backup.zip");
+        if (File.Exists(zipBackup))
         {
-            File.Copy(backupFile, targetFile, overwrite: true);
-            AppLogger.Instance.Info($"还原原始备份：{backupFile} -> {targetFile}");
-            result.Success = true;
-            result.InstalledPath = targetFile;
-            result.GameMode = modeInfo.DisplayName;
-            result.BackupPath = backupFile;
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Instance.Error(ex, "还原备份失败");
-            result.ErrorMessage = $"还原备份失败：{ex.Message}";
+            try
+            {
+                var bundles2Dir = Path.Combine(gameDirectory, "Bundles2");
+                using var archive = ZipFile.OpenRead(zipBackup);
+                foreach (var entry in archive.Entries)
+                {
+                    if (string.IsNullOrEmpty(entry.Name)) continue;
+                    var destPath = Path.Combine(bundles2Dir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    entry.ExtractToFile(destPath, overwrite: true);
+                    AppLogger.Instance.Info($"还原备份文件：{entry.FullName} -> {destPath}");
+                }
+                result.Success = true;
+                result.InstalledPath = Path.Combine(bundles2Dir, "_.index.bin");
+                result.GameMode = modeInfo.DisplayName;
+                result.BackupPath = zipBackup;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Instance.Error(ex, "从 ZIP 还原备份失败");
+                result.ErrorMessage = $"从 ZIP 还原备份失败：{ex.Message}";
+            }
+            return Task.FromResult(result);
         }
 
+        // 兼容旧版：仅还原 _.index.bin.original
+        var oldBackup = Path.Combine(backupDir, "_.index.bin.original");
+        var oldTarget = Path.Combine(gameDirectory, "Bundles2", "_.index.bin");
+        if (File.Exists(oldBackup))
+        {
+            try
+            {
+                File.Copy(oldBackup, oldTarget, overwrite: true);
+                AppLogger.Instance.Info($"还原原始备份（旧格式）：{oldBackup} -> {oldTarget}");
+                result.Success = true;
+                result.InstalledPath = oldTarget;
+                result.GameMode = modeInfo.DisplayName;
+                result.BackupPath = oldBackup;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Instance.Error(ex, "还原备份失败");
+                result.ErrorMessage = $"还原备份失败：{ex.Message}";
+            }
+            return Task.FromResult(result);
+        }
+
+        result.ErrorMessage = $"未找到备份文件：{zipBackup} 或 {oldBackup}";
         return Task.FromResult(result);
     }
 
@@ -135,29 +181,74 @@ public class PatchInstaller
         string targetGameFile = modeInfo.Mode == GameMode.GGPK
             ? Path.Combine(gameDirectory, "Content.ggpk")
             : Path.Combine(gameDirectory, "Bundles2", "_.index.bin");
-        string backupFile = modeInfo.Mode == GameMode.GGPK
-            ? Path.Combine(backupDir, "Content.ggpk.original")
-            : Path.Combine(backupDir, "_.index.bin.original");
 
-        if (File.Exists(backupFile))
+        if (modeInfo.Mode == GameMode.GGPK)
         {
-            progress?.Report("4/6 正在还原原始数据文件...");
-            try
+            var ggpkBackup = Path.Combine(backupDir, "Content.ggpk.original");
+            if (File.Exists(ggpkBackup))
             {
-                File.Copy(backupFile, targetGameFile, overwrite: true);
-                AppLogger.Instance.Info($"安装前还原原始备份：{backupFile} -> {targetGameFile}");
+                progress?.Report("4/6 正在还原原始数据文件...");
+                try
+                {
+                    File.Copy(ggpkBackup, targetGameFile, overwrite: true);
+                    AppLogger.Instance.Info($"安装前还原原始备份：{ggpkBackup} -> {targetGameFile}");
+                }
+                catch (Exception ex)
+                {
+                    result.ErrorMessage = $"还原原始备份失败：{ex.Message}";
+                    return result;
+                }
             }
-            catch (Exception ex)
+        }
+        else
+        {
+            // Bundles2 模式：优先从 ZIP 还原，兼容旧版 .original 文件
+            var zipBackup = Path.Combine(backupDir, "bundles2_backup.zip");
+            var oldBackup = Path.Combine(backupDir, "_.index.bin.original");
+            if (File.Exists(zipBackup))
             {
-                result.ErrorMessage = $"还原原始备份失败：{ex.Message}";
-                return result;
+                progress?.Report("4/6 正在还原原始数据文件...");
+                try
+                {
+                    var bundles2Dir = Path.Combine(gameDirectory, "Bundles2");
+                    using var archive = ZipFile.OpenRead(zipBackup);
+                    foreach (var entry in archive.Entries)
+                    {
+                        if (string.IsNullOrEmpty(entry.Name)) continue;
+                        var destPath = Path.Combine(bundles2Dir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                        entry.ExtractToFile(destPath, overwrite: true);
+                    }
+                    AppLogger.Instance.Info($"安装前从 ZIP 还原原始备份：{zipBackup}");
+                }
+                catch (Exception ex)
+                {
+                    result.ErrorMessage = $"还原原始备份失败：{ex.Message}";
+                    return result;
+                }
+            }
+            else if (File.Exists(oldBackup))
+            {
+                progress?.Report("4/6 正在还原原始数据文件...");
+                try
+                {
+                    File.Copy(oldBackup, targetGameFile, overwrite: true);
+                    AppLogger.Instance.Info($"安装前还原原始备份（旧格式）：{oldBackup} -> {targetGameFile}");
+                }
+                catch (Exception ex)
+                {
+                    result.ErrorMessage = $"还原原始备份失败：{ex.Message}";
+                    return result;
+                }
             }
         }
 
         string sourceDat;
         if (modeInfo.Mode == GameMode.Bundles2)
         {
-            if (!File.Exists(backupFile))
+            var zipBackup = Path.Combine(backupDir, "bundles2_backup.zip");
+            var oldBackup = Path.Combine(backupDir, "_.index.bin.original");
+            if (!File.Exists(zipBackup) && !File.Exists(oldBackup))
             {
                 progress?.Report("4/6 正在从 Bundles2 提取原始数据文件...");
             }
@@ -171,7 +262,8 @@ public class PatchInstaller
         }
         else
         {
-            if (!File.Exists(backupFile))
+            var ggpkBackup = Path.Combine(backupDir, "Content.ggpk.original");
+            if (!File.Exists(ggpkBackup))
             {
                 progress?.Report("4/6 正在定位原始数据文件...");
             }
@@ -304,29 +396,77 @@ public class PatchInstaller
         CancellationToken cancellationToken)
     {
         var indexBin = Path.Combine(gameDirectory, "Bundles2", "_.index.bin");
+        var bundles2Dir = Path.Combine(gameDirectory, "Bundles2");
         var backupDir = Path.Combine(_exportService.OutputDirectory, "backup");
         Directory.CreateDirectory(backupDir);
-        // 使用固定文件名保存"原始"备份，只在首次安装时创建，避免备份已打补丁的文件导致无法还原。
+        // 使用 ZIP 保存"原始"备份，包含 _.index.bin、_.index.high.bin、_.index.low.bin、.index.dbg 和 LibGGPK3/ 目录
+        // 只在首次安装时创建，避免备份已打补丁的文件导致无法还原。
+        var zipBackupPath = Path.Combine(backupDir, "bundles2_backup.zip");
+        var oldBackupPath = Path.Combine(backupDir, "_.index.bin.original");
         var result = new InstallResult
         {
-            BackupPath = Path.Combine(backupDir, "_.index.bin.original")
+            BackupPath = zipBackupPath
         };
 
         try
         {
-            if (!File.Exists(result.BackupPath))
+            // 如果旧版 .original 存在但 ZIP 不存在，迁移旧备份并补充其他文件
+            if (!File.Exists(zipBackupPath))
             {
-                File.Copy(indexBin, result.BackupPath, overwrite: false);
-                AppLogger.Instance.Info($"备份原始 Bundles2 索引：{result.BackupPath}");
+                using (var archive = ZipFile.Open(zipBackupPath, ZipArchiveMode.Create))
+                {
+                    // 如果旧版 .original 存在，先将其加入 ZIP
+                    if (File.Exists(oldBackupPath))
+                    {
+                        archive.CreateEntryFromFile(oldBackupPath, "_.index.bin");
+                        AppLogger.Instance.Info($"迁移旧版备份到 ZIP：{oldBackupPath}");
+                    }
+                    else
+                    {
+                        // 首次备份 _.index.bin
+                        archive.CreateEntryFromFile(indexBin, "_.index.bin");
+                    }
+
+                    // 备份其他索引文件
+                    foreach (var name in new[] { "_.index.high.bin", "_.index.low.bin", ".index.dbg" })
+                    {
+                        var srcPath = Path.Combine(bundles2Dir, name);
+                        if (File.Exists(srcPath))
+                        {
+                            archive.CreateEntryFromFile(srcPath, name);
+                            AppLogger.Instance.Info($"备份文件：{name}");
+                        }
+                    }
+
+                    // 备份 LibGGPK3 目录
+                    var libDir = Path.Combine(bundles2Dir, "LibGGPK3");
+                    if (Directory.Exists(libDir))
+                    {
+                        var files = Directory.GetFiles(libDir, "*", SearchOption.AllDirectories);
+                        foreach (var file in files)
+                        {
+                            var relative = file.Substring(bundles2Dir.Length + 1).Replace('\\', '/');
+                            archive.CreateEntryFromFile(file, relative);
+                            AppLogger.Instance.Info($"备份文件：{relative}");
+                        }
+                    }
+                }
+                AppLogger.Instance.Info($"创建 Bundles2 完整备份 ZIP：{zipBackupPath}");
+
+                // 删除旧版 .original 文件（已迁移到 ZIP）
+                if (File.Exists(oldBackupPath))
+                {
+                    File.Delete(oldBackupPath);
+                }
             }
             else
             {
-                AppLogger.Instance.Info($"原始备份已存在，跳过备份：{result.BackupPath}");
+                AppLogger.Instance.Info($"原始备份 ZIP 已存在，跳过备份：{zipBackupPath}");
             }
         }
         catch (Exception ex)
         {
-            result.ErrorMessage = $"备份 Bundles2 索引失败：{ex.Message}";
+            result.ErrorMessage = $"备份 Bundles2 文件失败：{ex.Message}";
             return result;
         }
 

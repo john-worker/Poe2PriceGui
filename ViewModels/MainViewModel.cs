@@ -1358,12 +1358,20 @@ public class MainViewModel : INotifyPropertyChanged
                 return;
             }
 
-            var files = Directory.GetFiles(backupDir);
+            var files = Directory.GetFiles(backupDir, "*", SearchOption.AllDirectories);
             var deleted = 0;
             foreach (var file in files)
             {
                 File.Delete(file);
                 deleted++;
+            }
+
+            // 清理空子目录
+            foreach (var dir in Directory.GetDirectories(backupDir, "*", SearchOption.AllDirectories)
+                         .OrderByDescending(d => d.Length))
+            {
+                if (Directory.GetFiles(dir).Length == 0 && Directory.GetDirectories(dir).Length == 0)
+                    Directory.Delete(dir);
             }
 
             AppLogger.Instance.Info($"已清空备份目录，删除 {deleted} 个文件：{backupDir}");
