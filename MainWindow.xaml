@@ -243,11 +243,13 @@
                     <GroupBox Grid.Row="1" Header="价格补丁">
                         <StackPanel Orientation="Vertical" Margin="10">
                             <TextBlock Text="将当前价格导出为补丁文件。生成 zip 包不会修改游戏文件；安装补丁会备份并替换游戏目录下的 datc64。" TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10"/>
+                            <TextBlock Text="⚠️ 重要提示： 本工具会修改游戏文件，和其他补丁一样存在封号风险。使用前请确认自己能接受风险，并在关闭游戏后再运行。" TextWrapping="Wrap" Foreground="#DC143C" Margin="0,0,0,10"/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                                 <Button Content="导出价格 CSV" Command="{Binding ExportPricesCommand}" Padding="15,5" Margin="0,0,10,0"/>
                                 <Button Content="导出补丁包 (zip)" Command="{Binding ExportPatchCommand}" Padding="15,5" Margin="0,0,10,0"/>
                                 <Button Content="生成并安装补丁" Command="{Binding InstallPatchCommand}" Padding="15,5" Margin="0,0,10,0"/>
-                                <Button Content="还原最新备份" Command="{Binding RestoreBackupCommand}" Padding="15,5"/>
+                                <Button Content="还原最新备份" Command="{Binding RestoreBackupCommand}" Padding="15,5" Margin="0,0,10,0"/>
+                                <Button Content="清空备份" Command="{Binding ClearBackupsCommand}" Padding="15,5"/>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                 <Path Fill="#FF181717" Width="12" Height="12" Stretch="Uniform" Margin="0,0,4,0" VerticalAlignment="Center"
@@ -313,6 +315,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -347,6 +350,11 @@
                                     Command="{Binding TestPriceCheckerCommand}"
                                     Padding="10,5" Margin="0,8,0,0" HorizontalAlignment="Left"
                                     ToolTip="使用内置的猎首腰带文本模拟查价流程，测试登录和搜索是否正常"/>
+
+                            <Button Grid.Row="6" Grid.ColumnSpan="2" Content="测试查价器（精工箭袋-未鉴定传奇）"
+                                    Command="{Binding TestPriceCheckerQuiverCommand}"
+                                    Padding="10,5" Margin="0,8,0,0" HorizontalAlignment="Left"
+                                    ToolTip="使用内置的精工箭袋文本模拟查价流程，测试未鉴定传奇物品按基底搜索回退是否正常"/>
                         </Grid>
                     </GroupBox>
 

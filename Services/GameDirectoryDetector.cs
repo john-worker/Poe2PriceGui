@@ -146,8 +146,11 @@ public static class GameDirectoryDetector
     {
         var weGameBases = new[]
         {
-            Path.Combine("D:", "WeGameApps", "rail_apps"),
             Path.Combine("C:", "WeGameApps", "rail_apps"),
+            Path.Combine("D:", "WeGameApps", "rail_apps"),
+            Path.Combine("E:", "WeGameApps", "rail_apps"),
+            Path.Combine("F:", "WeGameApps", "rail_apps"),
+            Path.Combine("G:", "WeGameApps", "rail_apps"),
         };
 
         foreach (var basePath in weGameBases)

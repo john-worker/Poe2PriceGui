@@ -80,10 +80,12 @@ public class MainViewModel : INotifyPropertyChanged
         ExportPatchCommand = new RelayCommand(async () => await ExportPatchAsync(), () => Prices.Count > 0);
         InstallPatchCommand = new RelayCommand(async () => await InstallPatchAsync(), () => Prices.Count > 0);
         RestoreBackupCommand = new RelayCommand(async () => await RestoreBackupAsync(), () => !IsBusy);
+        ClearBackupsCommand = new RelayCommand(async () => await ClearBackupsAsync(), () => !IsBusy);
         AutoDetectGameDirectoryCommand = new RelayCommand(ShowAutoDetectGameDirectory, () => !IsBusy);
         OpenPriceCheckerLoginCommand = new RelayCommand(OpenPriceCheckerLoginBrowser);
         CaptureHotkeyCommand = new RelayCommand(CaptureHotkey);
         TestPriceCheckerCommand = new RelayCommand(async () => await TestPriceCheckerAsync(), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
+        TestPriceCheckerQuiverCommand = new RelayCommand(async () => await TestPriceCheckerAsync("quiver"), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
         CheckForUpdateCommand = new RelayCommand(async () => await CheckForUpdateAsync(), () => !IsBusy);
 
         _filteredPrices.Filter = FilterBySelectedCategory;
@@ -189,10 +191,12 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand ExportPatchCommand { get; }
     public ICommand InstallPatchCommand { get; }
     public ICommand RestoreBackupCommand { get; }
+    public ICommand ClearBackupsCommand { get; }
     public ICommand AutoDetectGameDirectoryCommand { get; }
     public ICommand OpenPriceCheckerLoginCommand { get; }
     public ICommand CaptureHotkeyCommand { get; }
     public ICommand TestPriceCheckerCommand { get; }
+    public ICommand TestPriceCheckerQuiverCommand { get; }
     public ICommand CheckForUpdateCommand { get; }
 
     /// <summary>
@@ -381,7 +385,8 @@ public class MainViewModel : INotifyPropertyChanged
             if (itemInfo.IsUnique)
             {
                 fields.Add(new SearchField { Label = "名称", Key = "name", Value = itemInfo.Name, IsSelected = true });
-                if (!string.IsNullOrWhiteSpace(itemInfo.BaseType) && itemInfo.BaseType != itemInfo.Name)
+                // 即使 BaseType == Name（未鉴定或只有一行名称），也提供基底选项让用户可切换。
+                if (!string.IsNullOrWhiteSpace(itemInfo.BaseType))
                 {
                     fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = false });
                 }
@@ -444,9 +449,9 @@ public class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// 测试查价器：使用内置的猎首腰带文本模拟查价流程，不依赖剪贴板。
     /// </summary>
-    public async Task TestPriceCheckerAsync()
+    public async Task TestPriceCheckerAsync(string? testItem = null)
     {
-        AppLogger.Instance.Info("测试查价器触发");
+        AppLogger.Instance.Info($"测试查价器触发{(testItem != null ? $"（{testItem}）" : "")}");
 
         if (string.IsNullOrWhiteSpace(PriceCheckerLeague))
         {
@@ -457,7 +462,31 @@ public class MainViewModel : INotifyPropertyChanged
         IsBusy = true;
         try
         {
-            var itemText = @"物品类别: 腰带
+            string itemText;
+            string testLabel;
+
+            if (testItem == "quiver")
+            {
+                testLabel = "精工箭袋";
+                itemText = @"物品类别: 箭袋
+稀有度: 传奇
+精工箭袋
+--------
+物品等级: 80
+--------
+{ 基底属性 — 攻击, 速度 }
+攻击速度提高 7 (7-10)%
+--------
+未鉴定
+--------
+只能在使用弓时装备。
+--------
+引路石掉落";
+            }
+            else
+            {
+                testLabel = "猎首";
+                itemText = @"物品类别: 腰带
 稀有度: 传奇
 猎首
 重革腰带
@@ -481,6 +510,7 @@ public class MainViewModel : INotifyPropertyChanged
 当你击败稀有怪物时，获得它的词缀，持续 60 秒
 --------
 " + "\"骨骼是灵魂的居所，\n血肉是精神和世界交流的窗口，推动一切的力量就在心窝。\n即使有了这些，失去了头脑就没有自我。\"\n——冈姆军师拉维安加\n--------\n引路石掉落";
+            }
 
             var itemInfo = ItemTextParser.Parse(itemText);
             AppLogger.Instance.Info($"测试解析结果：Name={itemInfo.Name}, BaseType={itemInfo.BaseType}, Rarity={itemInfo.Rarity}, ItemLevel={itemInfo.ItemLevel}, IsValid={itemInfo.IsValid}");
@@ -495,7 +525,8 @@ public class MainViewModel : INotifyPropertyChanged
             if (itemInfo.IsUnique)
             {
                 fields.Add(new SearchField { Label = "名称", Key = "name", Value = itemInfo.Name, IsSelected = true });
-                if (!string.IsNullOrWhiteSpace(itemInfo.BaseType) && itemInfo.BaseType != itemInfo.Name)
+                // 即使 BaseType == Name（未鉴定或只有一行名称），也提供基底选项让用户可切换。
+                if (!string.IsNullOrWhiteSpace(itemInfo.BaseType))
                 {
                     fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = false });
                 }
@@ -533,7 +564,7 @@ public class MainViewModel : INotifyPropertyChanged
             };
 
             ShowOverlay(viewModel);
-            _toastService.ShowInfo("已加载测试物品（猎首），可在叠加层中点击搜索");
+            _toastService.ShowInfo($"已加载测试物品（{testLabel}），可在叠加层中点击搜索");
         }
         catch (Exception ex)
         {
@@ -597,15 +628,39 @@ public class MainViewModel : INotifyPropertyChanged
 
             AppLogger.Instance.Info($"叠加层搜索：league={PriceCheckerLeague}, term={searchTerm}, byType={searchByType}, ilvl={itemLevel}, rarity={rarity}, mods={selectedMods?.Count ?? 0}, exact={isExactSearch}");
 
-            var searchResult = await _tradeService.SearchAsync(
-                PriceCheckerLeague,
-                searchTerm,
-                PriceCheckerPoeSessionId,
-                searchByType: searchByType,
-                itemLevel: itemLevel,
-                rarity: rarity,
-                selectedMods: selectedMods,
-                isExactSearch: isExactSearch);
+            TradeSearchResult searchResult;
+            try
+            {
+                searchResult = await _tradeService.SearchAsync(
+                    PriceCheckerLeague,
+                    searchTerm,
+                    PriceCheckerPoeSessionId,
+                    searchByType: searchByType,
+                    itemLevel: itemLevel,
+                    rarity: rarity,
+                    selectedMods: selectedMods,
+                    isExactSearch: isExactSearch);
+            }
+            catch (HttpRequestException ex) when (!searchByType && ex.Message.Contains("400"))
+            {
+                // 按名称搜索返回 400（Unknown item name），自动回退按基底类型搜索。
+                // 从所有字段中查找基底类型（不要求已选中），因为回退是自动的。
+                var fallbackTypeField = vm.SearchFields.FirstOrDefault(f => f.Key == "type");
+                if (fallbackTypeField == null) throw;
+
+                AppLogger.Instance.Info($"按名称搜索返回 400，自动回退按基底类型搜索：{fallbackTypeField.Value}");
+                searchTerm = fallbackTypeField.Value;
+                searchByType = true;
+                searchResult = await _tradeService.SearchAsync(
+                    PriceCheckerLeague,
+                    searchTerm,
+                    PriceCheckerPoeSessionId,
+                    searchByType: searchByType,
+                    itemLevel: itemLevel,
+                    rarity: rarity,
+                    selectedMods: selectedMods,
+                    isExactSearch: isExactSearch);
+            }
 
             AppLogger.Instance.Info($"搜索结果：total={searchResult.Total}, ids={searchResult.ResultIds.Count}");
             if (searchResult.ResultIds.Count == 0)
@@ -1274,6 +1329,52 @@ public class MainViewModel : INotifyPropertyChanged
             AppLogger.Instance.Error(ex, "还原备份失败");
             SettingsStatusMessage = $"还原备份失败：{ex.Message}";
             _toastService.ShowError($"还原备份失败：{ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task ClearBackupsAsync()
+    {
+        var confirm = MessageBox.Show(
+            "你确定清空备份吗？",
+            "确认清空备份",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.Yes) return;
+
+        IsBusy = true;
+        SettingsStatusMessage = "正在清空备份...";
+
+        try
+        {
+            var backupDir = Path.Combine(_patchExportService.OutputDirectory, "backup");
+            if (!Directory.Exists(backupDir))
+            {
+                SettingsStatusMessage = "备份目录不存在，无需清空";
+                _toastService.ShowInfo("备份目录不存在，无需清空");
+                return;
+            }
+
+            var files = Directory.GetFiles(backupDir);
+            var deleted = 0;
+            foreach (var file in files)
+            {
+                File.Delete(file);
+                deleted++;
+            }
+
+            AppLogger.Instance.Info($"已清空备份目录，删除 {deleted} 个文件：{backupDir}");
+            SettingsStatusMessage = $"已清空备份（删除 {deleted} 个文件）";
+            _toastService.ShowSuccess($"已清空备份（删除 {deleted} 个文件）");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Error(ex, "清空备份失败");
+            SettingsStatusMessage = $"清空备份失败：{ex.Message}";
+            _toastService.ShowError($"清空备份失败：{ex.Message}");
         }
         finally
         {
