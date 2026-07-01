@@ -9,12 +9,15 @@ namespace Poe2PriceGui.Services;
 public static class ClipboardService
 {
     private const uint KeyeventfKeyup = 0x0002;
+    private const uint KeyeventfScancode = 0x0008;
+    private const uint KeyeventfExtendedkey = 0x0001;
     private const ushort VkControl = 0x11;
     private const ushort VkC = 0x43;
     private const int MaxRetry = 3;
     private const int RetryDelayMs = 150;
     private const uint WmKeydown = 0x0100;
     private const uint WmKeyup = 0x0101;
+    private const uint MapvkVkToVsc = 0;
 
     /// <summary>
     /// 向当前前台窗口发送 Ctrl+C，然后读取剪贴板文本。
@@ -101,6 +104,7 @@ public static class ClipboardService
     /// <summary>
     /// 通过 PostMessage 向目标窗口发送 WM_KEYDOWN/WM_KEYUP，模拟 Ctrl+C。
     /// 直接发送到窗口消息队列，不经过硬件输入管道，不会导致游戏卡顿。
+    /// lParam 中编码扫描码到高位字（bits 16-23），提升输入法兼容性。
     /// </summary>
     private static void SendCopyViaPostMessage(IntPtr hWnd)
     {
@@ -110,66 +114,113 @@ public static class ClipboardService
             return;
         }
 
-        // lParam 高位字重复计数=1，扫描码=0；低位字扩展标志=0。
-        const uint lparamDown = 0x00000001;
-        const uint lparamUp = 0xC0000001;
+        // 计算扫描码，编码到 lParam 的高位字（bits 16-23）。
+        var ctrlScan = (uint)MapVirtualKey(VkControl, MapvkVkToVsc);
+        var cScan = (uint)MapVirtualKey(VkC, MapvkVkToVsc);
 
-        PostMessage(hWnd, WmKeydown, (IntPtr)VkControl, (IntPtr)lparamDown);
-        PostMessage(hWnd, WmKeydown, (IntPtr)VkC, (IntPtr)lparamDown);
+        // lParam: 低位字 repeat count=1，bits 16-23 = scan code，bit 24 = extended flag。
+        var lparamCtrlDown = (ctrlScan << 16) | 0x00000001;
+        var lparamCDown = (cScan << 16) | 0x00000001;
+        // KeyUp: bit 30 (previous state) = 1, bit 31 (transition state) = 1。
+        var lparamCtrlUp = (ctrlScan << 16) | 0xC0000001;
+        var lparamCUp = (cScan << 16) | 0xC0000001;
+
+        PostMessage(hWnd, WmKeydown, (IntPtr)VkControl, (IntPtr)lparamCtrlDown);
+        PostMessage(hWnd, WmKeydown, (IntPtr)VkC, (IntPtr)lparamCDown);
         Thread.Sleep(30);
-        PostMessage(hWnd, WmKeyup, (IntPtr)VkC, (IntPtr)lparamUp);
-        PostMessage(hWnd, WmKeyup, (IntPtr)VkControl, (IntPtr)lparamUp);
+        PostMessage(hWnd, WmKeyup, (IntPtr)VkC, (IntPtr)lparamCUp);
+        PostMessage(hWnd, WmKeyup, (IntPtr)VkControl, (IntPtr)lparamCtrlUp);
 
-        AppLogger.Instance.Info("PostMessage 已发送 Ctrl+C 消息");
+        AppLogger.Instance.Info($"PostMessage 已发送 Ctrl+C 消息（Ctrl scan={ctrlScan}, C scan={cScan}）");
     }
 
     /// <summary>
-    /// 发送 Ctrl+C：用 SendInput 发送虚拟键码，加入按键间小延迟模拟真实节奏。
+    /// 发送 Ctrl+C：用 SendInput 发送硬件扫描码（WVk=0），绕过键盘布局影响。
+    /// 参考 xiletrade-master 的 Input.Send 实现，使用 KEYEVENTF_SCANCODE 标志。
     /// </summary>
     private static void SendCopyKeyCombo()
     {
-        var inputs = new INPUT[4];
-
-        // Ctrl down
-        inputs[0] = new INPUT
-        {
-            Type = 1,
-            U = new InputUnion { Ki = new KEYBDINPUT { WVk = VkControl } }
-        };
-
-        // C down
-        inputs[1] = new INPUT
-        {
-            Type = 1,
-            U = new InputUnion { Ki = new KEYBDINPUT { WVk = VkC } }
-        };
-
+        // 扫描码 KeyDown：Ctrl → C
+        SendScanCodeKeyDown(VkControl);
+        SendScanCodeKeyDown(VkC);
         Thread.Sleep(20);
+        // 扫描码 KeyUp：C → Ctrl
+        SendScanCodeKeyUp(VkC);
+        SendScanCodeKeyUp(VkControl);
 
-        // C up
-        inputs[2] = new INPUT
+        AppLogger.Instance.Info("SendInput 已发送扫描码 Ctrl+C");
+    }
+
+    /// <summary>
+    /// 使用扫描码发送 KeyDown。WVk 必须设为 0，否则 Windows 会忽略 WScan。
+    /// </summary>
+    private static void SendScanCodeKeyDown(ushort vk)
+    {
+        var scanCode = (ushort)MapVirtualKey(vk, MapvkVkToVsc);
+        var flags = KeyeventfScancode;
+        if (IsExtendedKey(vk)) flags |= KeyeventfExtendedkey;
+
+        var input = new INPUT
         {
             Type = 1,
-            U = new InputUnion { Ki = new KEYBDINPUT { WVk = VkC, DwFlags = KeyeventfKeyup } }
+            U = new InputUnion
+            {
+                Ki = new KEYBDINPUT { WVk = 0, WScan = scanCode, DwFlags = flags }
+            }
         };
 
-        // Ctrl up
-        inputs[3] = new INPUT
-        {
-            Type = 1,
-            U = new InputUnion { Ki = new KEYBDINPUT { WVk = VkControl, DwFlags = KeyeventfKeyup } }
-        };
-
-        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        var sent = SendInput(1, [input], Marshal.SizeOf<INPUT>());
         if (sent == 0)
         {
             var err = Marshal.GetLastWin32Error();
-            AppLogger.Instance.Warn($"SendInput 失败，Win32Error={err}（5=拒绝访问/UIPI；87=参数错误）");
+            AppLogger.Instance.Warn($"SendInput KeyDown 失败：vk=0x{vk:X2}, scan=0x{scanCode:X2}, Win32Error={err}");
         }
-        else
+    }
+
+    /// <summary>
+    /// 使用扫描码发送 KeyUp。
+    /// </summary>
+    private static void SendScanCodeKeyUp(ushort vk)
+    {
+        var scanCode = (ushort)MapVirtualKey(vk, MapvkVkToVsc);
+        var flags = KeyeventfScancode | KeyeventfKeyup;
+        if (IsExtendedKey(vk)) flags |= KeyeventfExtendedkey;
+
+        var input = new INPUT
         {
-            AppLogger.Instance.Info($"SendInput 成功发送 {sent} 个输入事件，cbSize={Marshal.SizeOf<INPUT>()}");
+            Type = 1,
+            U = new InputUnion
+            {
+                Ki = new KEYBDINPUT { WVk = 0, WScan = scanCode, DwFlags = flags }
+            }
+        };
+
+        var sent = SendInput(1, [input], Marshal.SizeOf<INPUT>());
+        if (sent == 0)
+        {
+            var err = Marshal.GetLastWin32Error();
+            AppLogger.Instance.Warn($"SendInput KeyUp 失败：vk=0x{vk:X2}, scan=0x{scanCode:X2}, Win32Error={err}");
         }
+    }
+
+    /// <summary>
+    /// 判断是否为扩展键（需要 KEYEVENTF_EXTENDEDKEY 标志）。
+    /// 参考 xiletrade-master/Input.cs 的 IsExtendedKey 实现。
+    /// </summary>
+    private static bool IsExtendedKey(ushort vk)
+    {
+        return vk is 0xA3   // VK_RCONTROL
+            or 0xA5          // VK_RMENU
+            or 0x2D          // VK_INSERT
+            or 0x2E          // VK_DELETE
+            or 0x24          // VK_HOME
+            or 0x23          // VK_END
+            or 0x21          // VK_PRIOR
+            or 0x22          // VK_NEXT
+            or 0x26          // VK_UP
+            or 0x25          // VK_LEFT
+            or 0x27          // VK_RIGHT
+            or 0x28;         // VK_DOWN
     }
 
     /// <summary>
@@ -196,6 +247,9 @@ public static class ClipboardService
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();

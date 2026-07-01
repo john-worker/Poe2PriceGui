@@ -18,7 +18,11 @@ public class PoeTradeService
     private const string ChinaBaseUrl = "https://poe.game.qq.com/api/trade2";
     private const string IntlBaseUrl = "https://www.pathofexile.com/api/trade2";
     private const int MaxFetchIds = 10;
-    private const int RequestDelayMs = 1200;
+    // 参考 xiletrade-master：不使用固定长延迟，只在 API 限流时等待。
+    // 保留小幅延迟避免触发国服 API 限流（xiletrade 用响应头驱动，这里简化为固定低延迟）。
+    private const int RequestDelayMs = 200;
+    // 收到 429 时的默认退避秒数（若响应无 Retry-After 头）。
+    private const int RateLimitBackoffSec = 5;
 
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _rateLimiter = new(1, 1);
@@ -29,19 +33,28 @@ public class PoeTradeService
     /// <summary>是否为国服。</summary>
     public bool IsChina { get; set; } = true;
 
-    // 缓存的 stats 数据：key = 归一化文本，value = 该文本在所有分类下的 stat ID 列表（含分类前缀）。
-    // 同一文本可能出现在多个分类中（如「所有元素抗性 +#」在 implicit 与 explicit 下都有），需保留全部以正确匹配。
-    private Dictionary<string, List<(string id, string category)>>? _statsCache;
+    // stats 缓存：扁平列表，存储原始 stat 文本（含 # 占位符）和对应的 ID/分类。
+    // 参考 xiletrade-master 的 FilterData 结构，不做预归一化，保留原始文本用于正则匹配。
+    private List<StatEntry>? _statsList;
     private DateTime _statsCacheTime;
     private static readonly TimeSpan StatsCacheExpiry = TimeSpan.FromHours(6);
 
-    // 用于归一化词缀文本的正则：匹配 "(...)" 范围和独立数字。
-    private static readonly Regex RangeRegex = new(@"\s*\([^)]*\)", RegexOptions.Compiled);
-    private static readonly Regex NumberRegex = new(@"\d+\.?\d*", RegexOptions.Compiled);
-    // 匹配括号范围之前的第一个数值（含小数和负号），用于精确搜索。
+    /// <summary>stat 缓存条目。</summary>
+    private record StatEntry(string Text, string Id, string Category)
+    {
+        public int Distance { get; init; }
+    }
+
+    // 正则：匹配词缀中的数值（含小数和负号），用于替换为 # 占位符。
+    private static readonly Regex DecimalPattern = new(@"[-]?[0-9]+\.?[0-9]*|[-]?[0-9]+\.[0-9]+", RegexOptions.Compiled);
+    // 正则：匹配词缀中的括号范围 (min-max) 或 (val)，用于剥离 tier 信息。
+    private static readonly Regex TierRangeRegex = new(@"\s*\([^)]*\)", RegexOptions.Compiled);
+    // 正则：匹配 # 或 \#（转义后），用于替换为数字匹配模式。
+    private static readonly Regex EscapedDiezePattern = new(@"\\#", RegexOptions.Compiled);
+    // stat 匹配中 # 的替换模式：匹配数字或 # 占位符（同时兼容游戏文本和 API stat 文本）。
+    private const string DecimalPatternDieze = @"[+-]?([0-9]+\.[0-9]+|[0-9]+|#)";
+    // 正则：匹配括号范围之前的第一个数值（含小数和负号），用于精确搜索。
     private static readonly Regex ModValueRegex = new(@"(-?\d+\.?\d*)\s*\(", RegexOptions.Compiled);
-    // 匹配连续的中文字符，用于关键词回退搜索。
-    private static readonly Regex ChineseCharRegex = new(@"[\u4e00-\u9fff]+", RegexOptions.Compiled);
 
     public PoeTradeService(HttpClient httpClient, bool isChina = true)
     {
@@ -51,22 +64,80 @@ public class PoeTradeService
     }
 
     /// <summary>
+    /// 从交易 API 获取可用赛季列表。参考 xiletrade-master 的 DataUpdaterService.LeaguesUpdate。
+    /// 赛季列表端点不需要 POESESSID 认证。
+    /// </summary>
+    public async Task<List<string>> GetLeaguesAsync(CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/data/leagues";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        AddCommonHeaders(request, null);
+
+        await _rateLimiter.WaitAsync(ct);
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, ct);
+            var json = await response.Content.ReadAsStringAsync(ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                AppLogger.Instance.Warn($"获取赛季列表失败：{(int)response.StatusCode} {json}");
+                return [];
+            }
+
+            var leagues = new List<string>();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("result", out var resultArr) && resultArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var league in resultArr.EnumerateArray())
+                {
+                    var id = league.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        leagues.Add(id);
+                    }
+                }
+            }
+
+            AppLogger.Instance.Info($"获取赛季列表：{leagues.Count} 个赛季：{string.Join(", ", leagues)}");
+            return leagues;
+        }
+        finally
+        {
+            await Task.Delay(RequestDelayMs, ct);
+            _rateLimiter.Release();
+        }
+    }
+
+    /// <summary>
     /// 按物品名称/基底搜索，返回搜索结果摘要。
     /// searchByType=true 时按基底(type)查询，否则按名称(name)查询（适用于传奇物品）。
+    /// baseType 不为空且 searchByType=false 时，同时传入 type 字段（参考 xiletrade-master：传奇物品同时传 name 和 type）。
     /// itemLevel 不为 null 时添加物品等级筛选。
     /// rarity 不为空时添加稀有度筛选。
     /// selectedMods 不为空时按词缀过滤：每个元素 = (词缀文本, 词缀类型)，词缀类型用于映射到正确的 stat 分类（implicit/explicit/crafted）。
     /// isExactSearch=true 时按词缀的具体数值过滤。
+    /// quality/corrupted/identified 参考 xiletrade-master GetTypeFilters/GetMiscFilters。
     /// </summary>
     public async Task<TradeSearchResult> SearchAsync(
         string league,
         string itemName,
         string? sessionId,
         bool searchByType = true,
+        string? baseType = null,
         int? itemLevel = null,
         string? rarity = null,
         List<(string text, string type)>? selectedMods = null,
         bool isExactSearch = false,
+        int? quality = null,
+        bool? corrupted = null,
+        bool? identified = null,
+        int? armour = null,
+        int? evasion = null,
+        int? energyShield = null,
+        int? dpsTotal = null,
+        int? dpsPhys = null,
+        int? dpsElem = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(league))
@@ -97,15 +168,10 @@ public class PoeTradeService
         {
             var url = $"{BaseUrl}/search/{Uri.EscapeDataString(league)}";
 
-            // 构建 misc_filters.filters：物品等级筛选（只设下限）。
-            var miscFiltersInner = new Dictionary<string, object>();
-            if (itemLevel.HasValue)
-            {
-                miscFiltersInner["ilvl"] = new { min = itemLevel.Value };
-            }
-
             // 构建 type_filters.filters：稀有度筛选。
+            // 参考 xiletrade-master GetTypeFilters：rarity 设置时 Disabled=false。
             var typeFiltersInner = new Dictionary<string, object>();
+            var typeFiltersDisabled = true;
             if (!string.IsNullOrWhiteSpace(rarity))
             {
                 var rarityOption = rarity switch
@@ -119,21 +185,85 @@ public class PoeTradeService
                 if (rarityOption != null)
                 {
                     typeFiltersInner["rarity"] = new { option = rarityOption };
+                    typeFiltersDisabled = false;
                 }
             }
-
-            // POE2 API 要求 type_filters/misc_filters 内层嵌套 filters 对象。
-            var filtersDict = new Dictionary<string, object>();
-            if (miscFiltersInner.Count > 0)
+            if (itemLevel.HasValue)
             {
-                filtersDict["misc_filters"] = new { filters = miscFiltersInner };
+                typeFiltersInner["ilvl"] = new { min = itemLevel.Value };
+                typeFiltersDisabled = false;
             }
+            // 品质（参考 xiletrade type_filters.filters.quality）。
+            if (quality.HasValue)
+            {
+                typeFiltersInner["quality"] = new { min = quality.Value };
+                typeFiltersDisabled = false;
+            }
+
+            // POE2 API 要求 type_filters/misc_filters/trade_filters 内层嵌套 filters 对象。
+            // 参考 xiletrade-master FiltersTwo/TypeTwo/TradeTwo 结构。
+            var filtersDict = new Dictionary<string, object>();
             if (typeFiltersInner.Count > 0)
             {
-                filtersDict["type_filters"] = new { filters = typeFiltersInner };
+                filtersDict["type_filters"] = new { disabled = typeFiltersDisabled, filters = typeFiltersInner };
             }
 
-            object filtersObj = filtersDict.Count > 0 ? filtersDict : new { };
+            // misc_filters：corrupted/identified（参考 xiletrade-master GetMiscFilters）。
+            var miscFiltersInner = new Dictionary<string, object>();
+            if (corrupted.HasValue)
+            {
+                miscFiltersInner["corrupted"] = new { option = corrupted.Value ? "true" : "false" };
+            }
+            if (identified.HasValue)
+            {
+                miscFiltersInner["identified"] = new { option = identified.Value ? "true" : "false" };
+            }
+            if (miscFiltersInner.Count > 0)
+            {
+                filtersDict["misc_filters"] = new { disabled = false, filters = miscFiltersInner };
+            }
+
+            // equipment_filters：ar/es/ev/dps/pdps/edps（参考 xiletrade-master GetEquipmentFilters）。
+            // JSON 字段名 ar=护甲, es=能量护盾, ev=闪避值, dps=总DPS, pdps=物理DPS, edps=元素DPS。
+            var equipmentFiltersInner = new Dictionary<string, object>();
+            if (armour.HasValue)
+            {
+                equipmentFiltersInner["ar"] = new { min = armour.Value };
+            }
+            if (evasion.HasValue)
+            {
+                equipmentFiltersInner["ev"] = new { min = evasion.Value };
+            }
+            if (energyShield.HasValue)
+            {
+                equipmentFiltersInner["es"] = new { min = energyShield.Value };
+            }
+            if (dpsTotal.HasValue)
+            {
+                equipmentFiltersInner["dps"] = new { min = dpsTotal.Value };
+            }
+            if (dpsPhys.HasValue)
+            {
+                equipmentFiltersInner["pdps"] = new { min = dpsPhys.Value };
+            }
+            if (dpsElem.HasValue)
+            {
+                equipmentFiltersInner["edps"] = new { min = dpsElem.Value };
+            }
+            if (equipmentFiltersInner.Count > 0)
+            {
+                filtersDict["equipment_filters"] = new { disabled = false, filters = equipmentFiltersInner };
+            }
+
+            // trade_filters：sale_type="priced" 只返回已标价挂单，避免大量未标价条目干扰。
+            // 参考 xiletrade-master GetTradeFilters(useSaleType=true)。
+            filtersDict["trade_filters"] = new
+            {
+                disabled = false,
+                filters = new { sale_type = new { option = "priced" } }
+            };
+
+            object filtersObj = filtersDict;
 
             // 构建 stats 过滤器。
             object? statsObj = null;
@@ -153,13 +283,18 @@ public class PoeTradeService
                 };
             }
 
-            // 使用 Dictionary 灵活构建 query，因为 stats 可能不存在。
+            // 使用 Dictionary 灵活构建 query，因为 stats/filters 可能不存在。
+            // POE2 API 要求 status 字段指定市场状态，否则返回 400 "Invalid query"。
+            // status="any" 包含在线和离线挂单（比 "online" 更宽松），参考 xiletrade-master 默认 "available"。
             var queryDict = new Dictionary<string, object?>
             {
                 ["sort"] = new { price = "asc" },
             };
 
-            var queryInner = new Dictionary<string, object?>();
+            var queryInner = new Dictionary<string, object?>
+            {
+                ["status"] = new { option = "any" },
+            };
             if (searchByType)
             {
                 queryInner["type"] = itemName;
@@ -167,6 +302,11 @@ public class PoeTradeService
             else
             {
                 queryInner["name"] = itemName;
+                // 传奇物品同时传 name 和 type（参考 xiletrade-master JsonDataTwoFactory.Create：unique 时同时设置 Name 和 Type）。
+                if (!string.IsNullOrWhiteSpace(baseType))
+                {
+                    queryInner["type"] = baseType;
+                }
             }
             queryInner["filters"] = filtersObj;
             if (statsObj != null)
@@ -178,6 +318,10 @@ public class PoeTradeService
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Content = JsonContent.Create(queryDict);
             AddCommonHeaders(request, sessionId);
+
+            // 记录请求体，便于诊断 400 错误。
+            var requestBody = await request.Content.ReadAsStringAsync(cancellationToken);
+            AppLogger.Instance.Info($"搜索请求：POST {url} body={requestBody}");
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -222,15 +366,35 @@ public class PoeTradeService
     }
 
     /// <summary>
-    /// 获取 stats 数据并缓存。返回 key=归一化文本, value=该文本对应的所有 (stat ID, 分类前缀) 列表。
-    /// 同一文本可能在多个分类下出现（如 implicit 与 explicit 都有「所有元素抗性 +#」），需全部保留。
-    /// 分类前缀直接从 stat ID 中提取（如 "explicit.stat_xxx" → "explicit"）。
+    /// 预加载 stats 数据到缓存。参考 xiletrade-master 启动时同步加载所有静态数据。
+    /// 在登录后后台调用，避免首次查价时阻塞。
     /// </summary>
-    private async Task<Dictionary<string, List<(string id, string category)>>> GetStatsAsync(string? sessionId, CancellationToken ct)
+    public async Task PreloadStatsAsync(string? sessionId, CancellationToken ct = default)
     {
-        if (_statsCache != null && DateTime.Now - _statsCacheTime < StatsCacheExpiry)
+        if (_statsList != null && DateTime.Now - _statsCacheTime < StatsCacheExpiry)
         {
-            return _statsCache;
+            return;
+        }
+        try
+        {
+            await GetStatsAsync(sessionId, ct);
+            AppLogger.Instance.Info("stats 预加载完成");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Warn($"stats 预加载失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 获取 stats 数据并缓存为扁平列表。保留原始 stat 文本（含 # 占位符），用于正则匹配。
+    /// 参考 xiletrade-master 的 FilterData 加载方式。
+    /// </summary>
+    private async Task<List<StatEntry>> GetStatsAsync(string? sessionId, CancellationToken ct)
+    {
+        if (_statsList != null && DateTime.Now - _statsCacheTime < StatsCacheExpiry)
+        {
+            return _statsList;
         }
 
         var url = $"{BaseUrl}/data/stats";
@@ -249,7 +413,7 @@ public class PoeTradeService
                 return [];
             }
 
-            var cache = new Dictionary<string, List<(string id, string category)>>();
+            var list = new List<StatEntry>();
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var resultArr) && resultArr.ValueKind == JsonValueKind.Array)
             {
@@ -266,32 +430,20 @@ public class PoeTradeService
                         var text = entry.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(text))
                         {
-                            // 先清理 [key|value] 格式标记，再归一化。
+                            // 清理 [key|value] 格式标记，保留原始 # 占位符。
                             var cleaned = CleanModDescription(text);
-                            var normalized = NormalizeModText(cleaned);
-                            // 从 stat ID 提取分类前缀（如 "explicit.stat_xxx" → "explicit"）。
                             var categoryPrefix = id.Contains('.') ? id.Split('.')[0] : "";
-                            if (!cache.TryGetValue(normalized, out var list))
-                            {
-                                list = new List<(string, string)>();
-                                cache[normalized] = list;
-                            }
-                            // 避免同一分类下的重复条目。
-                            if (!list.Any(x => x.id == id))
-                            {
-                                list.Add((id, categoryPrefix));
-                            }
+                            list.Add(new StatEntry(cleaned, id, categoryPrefix));
                         }
                     }
                 }
             }
 
-            _statsCache = cache;
+            _statsList = list;
             _statsCacheTime = DateTime.Now;
-            // 记录前 5 条样本，便于诊断格式问题。
-            var sample = cache.Take(5).Select(kv => $"[{kv.Key}]={string.Join(",", kv.Value.Select(v => v.id))}");
-            AppLogger.Instance.Info($"stats 数据缓存：{cache.Count} 条，样本：{string.Join(" | ", sample)}");
-            return cache;
+            var sample = list.Take(5).Select(e => $"[{e.Text}]={e.Id}");
+            AppLogger.Instance.Info($"stats 数据缓存：{list.Count} 条，样本：{string.Join(" | ", sample)}");
+            return list;
         }
         finally
         {
@@ -319,66 +471,174 @@ public class PoeTradeService
 
     /// <summary>
     /// 将词缀文本列表匹配到 stat ID 列表，同时解析出词缀的具体数值。
-    /// 每个 modTexts 元素 = (词缀文本, 词缀类型)，词缀类型用于映射到正确的 stat 分类（implicit/explicit/crafted）。
+    /// 参考 xiletrade-master 的 ModFilter + ModInfoParse 匹配策略：
+    /// 1. 正则精确匹配：构建 ^pattern$ 正则，# 替换为数字匹配模式，同时匹配 stat 文本中的 # 占位符
+    /// 2. Levenshtein 模糊匹配：作为兜底，距离阈值 = max(1, len/8)
     /// </summary>
-    private async Task<List<(string id, double? value)>> MatchModsToStatIdsAsync(List<(string text, string type)> modTexts, string? sessionId, CancellationToken ct)
+    private async Task<List<(string id, double? value)>> MatchModsToStatIdsAsync(
+        List<(string text, string type)> modTexts, string? sessionId, CancellationToken ct)
     {
         var stats = await GetStatsAsync(sessionId, ct);
         var result = new List<(string id, double? value)>();
 
         foreach (var (modText, modType) in modTexts)
         {
-            // 先解析数值（在归一化之前）。
-            var modValue = ExtractModValue(modText);
-
-            // 清理 [key|value] 格式标记后归一化。
+            // 1. 清理 [key|value] 格式标记。
             var cleaned = CleanModDescription(modText);
-            var normalized = NormalizeModText(cleaned);
 
-            // 把游戏内词缀类型映射到 API 分类前缀。
+            // 2. 剥离 tier 范围括号 (min-max)，提取数值。
+            var (stripped, _, _) = StripTierRanges(cleaned);
+            var modValue = ExtractModValue(stripped);
+
+            // 3. 将数值替换为 # 占位符，构建归一化文本。
+            var normalized = DecimalPattern.Replace(stripped, "#").Trim();
+            // 统一 +# → #（API stat 文本通常不带 + 号）。
+            normalized = normalized.Replace("+#", "#");
+
             var expectedCategory = MapModTypeToCategory(modType);
 
-            if (stats.TryGetValue(normalized, out var candidates) && candidates.Count > 0)
+            // 阶段1：正则精确匹配。
+            var regex = BuildStatRegex(normalized);
+            var regexMatches = stats.Where(s => regex.IsMatch(s.Text)).ToList();
+            if (regexMatches.Count > 0)
             {
+                var candidates = regexMatches.Select(e => (e.Id, e.Category)).ToList();
                 var statId = PickStatByCategory(candidates, expectedCategory, modText);
                 result.Add((statId, modValue));
+                AppLogger.Instance.Info($"词缀正则匹配：'{modText}' → {statId}（{regexMatches.Count} 个命中）");
                 continue;
             }
 
-            // 尝试部分匹配（按归一化文本包含关系）。
-            var partial = stats.FirstOrDefault(kv => normalized.Contains(kv.Key) || kv.Key.Contains(normalized));
-            if (partial.Value != null && partial.Value.Count > 0)
+            // 阶段2：Levenshtein 模糊匹配。
+            var bestMatch = FindLevenshteinMatch(normalized, stats, expectedCategory);
+            if (bestMatch != null)
             {
-                var statId = PickStatByCategory(partial.Value, expectedCategory, modText);
-                result.Add((statId, modValue));
-                AppLogger.Instance.Info($"词缀部分匹配：'{modText}' → '{partial.Key}' (stat: {statId})");
+                result.Add((bestMatch.Id, modValue));
+                AppLogger.Instance.Info($"词缀模糊匹配：'{modText}' → '{bestMatch.Text}' (stat: {bestMatch.Id}, 距离={bestMatch.Distance})");
                 continue;
             }
 
-            // 关键词回退：提取中文字符作为关键词搜索。
-            var keyword = ChineseCharRegex.Match(normalized).Value;
-            if (!string.IsNullOrEmpty(keyword))
-            {
-                var keywordCandidates = stats
-                    .Where(kv => kv.Key.Contains(keyword))
-                    .SelectMany(kv => kv.Value)
-                    .ToList();
-                if (keywordCandidates.Count > 0)
-                {
-                    // 记录所有候选，便于诊断。
-                    var candidateStrs = keywordCandidates.Select(c => $"[{c.category}]{c.id}");
-                    AppLogger.Instance.Info($"词缀关键词匹配 '{keyword}'：{keywordCandidates.Count} 个候选：{string.Join(" | ", candidateStrs)}");
-
-                    var statId = PickStatByCategory(keywordCandidates, expectedCategory, modText);
-                    result.Add((statId, modValue));
-                    continue;
-                }
-            }
-
-            AppLogger.Instance.Warn($"词缀未匹配到 stat ID：{modText} (类型: {modType}, 期望分类: {expectedCategory}, 归一化: {normalized}, 关键词: {keyword})");
+            AppLogger.Instance.Warn($"词缀未匹配：{modText} (类型: {modType}, 归一化: {normalized})");
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 构建 stat 匹配正则。参考 xiletrade-master 的 GetInputRegex 实现。
+    /// 将归一化文本中的 # 替换为同时匹配数字和 # 占位符的模式，构建 ^...$ 完整匹配正则。
+    /// </summary>
+    private static Regex BuildStatRegex(string normalizedText)
+    {
+        // 转义正则特殊字符。
+        var escaped = Regex.Escape(normalizedText);
+        // 将转义后的 \# 替换为数字匹配模式（同时匹配 # 占位符和实际数字）。
+        var pattern = EscapedDiezePattern.Replace(escaped, DecimalPatternDieze);
+        // 放宽 +# 模式：将 \+\# 替换为 [+]?\\#（使 + 号可选）。
+        pattern = pattern.Replace(@"\+" + DecimalPatternDieze, "[+]?" + DecimalPatternDieze);
+        return new Regex("^" + pattern + "$", RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// 剥离词缀文本中的 tier 范围括号 (min-max) 或 (val)。
+    /// 参考 xiletrade-master 的 ItemModifier.ParseTierValues 实现。
+    /// 返回剥离后的文本和 tier 范围值。
+    /// </summary>
+    private static (string text, double? tierMin, double? tierMax) StripTierRanges(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return (text, null, null);
+
+        double? tierMin = null;
+        double? tierMax = null;
+
+        // 匹配括号内容，提取 min-max 范围。
+        var match = TierRangeRegex.Match(text);
+        if (match.Success)
+        {
+            var inner = match.Value.Trim('(', ')', ' ');
+            // 尝试解析 min-max 格式。
+            var parts = inner.Split('-');
+            if (parts.Length == 2)
+            {
+                if (double.TryParse(parts[0], out var min)) tierMin = min;
+                if (double.TryParse(parts[1], out var max)) tierMax = max;
+            }
+            else if (double.TryParse(inner, out var val))
+            {
+                tierMin = val;
+                tierMax = val;
+            }
+        }
+
+        // 移除括号范围。
+        var stripped = TierRangeRegex.Replace(text, "");
+        return (stripped.Trim(), tierMin, tierMax);
+    }
+
+    /// <summary>
+    /// 使用 Levenshtein 距离进行模糊匹配。参考 xiletrade-master 的 ParseWithLevenshtein 实现。
+    /// 距离阈值 = max(1, text.Length / 8)。
+    /// </summary>
+    private static StatEntry? FindLevenshteinMatch(string normalizedText, List<StatEntry> stats, string expectedCategory)
+    {
+        if (string.IsNullOrEmpty(normalizedText) || stats.Count == 0) return null;
+
+        var bestDistance = int.MaxValue;
+        StatEntry? bestEntry = null;
+        var maxDistance = Math.Max(1, normalizedText.Length / 8);
+
+        foreach (var entry in stats)
+        {
+            // 长度差异过大则跳过。
+            if (Math.Abs(entry.Text.Length - normalizedText.Length) > maxDistance) continue;
+
+            var distance = LevenshteinDistance(normalizedText, entry.Text);
+            if (distance > maxDistance) continue;
+
+            // 优先匹配期望分类。
+            if (distance < bestDistance ||
+                (distance == bestDistance && bestEntry != null && 
+                 !string.IsNullOrEmpty(expectedCategory) && entry.Category == expectedCategory &&
+                 bestEntry.Category != expectedCategory))
+            {
+                bestDistance = distance;
+                bestEntry = entry;
+                if (distance == 0) break;
+            }
+        }
+
+        return bestEntry != null 
+            ? bestEntry with { Distance = bestDistance } 
+            : null;
+    }
+
+    /// <summary>
+    /// 计算 Levenshtein 编辑距离。参考 xiletrade-master 使用的 FuzzySharp 库算法。
+    /// </summary>
+    private static int LevenshteinDistance(string source, string target)
+    {
+        if (string.IsNullOrEmpty(source)) return target?.Length ?? 0;
+        if (string.IsNullOrEmpty(target)) return source.Length;
+
+        var n = source.Length;
+        var m = target.Length;
+        var d = new int[n + 1, m + 1];
+
+        for (var i = 0; i <= n; i++) d[i, 0] = i;
+        for (var j = 0; j <= m; j++) d[0, j] = j;
+
+        for (var i = 1; i <= n; i++)
+        {
+            for (var j = 1; j <= m; j++)
+            {
+                var cost = char.ToLower(source[i - 1]) == char.ToLower(target[j - 1]) ? 0 : 1;
+                d[i, j] = Math.Min(
+                    Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                    d[i - 1, j - 1] + cost);
+            }
+        }
+
+        return d[n, m];
     }
 
     /// <summary>
@@ -404,27 +664,26 @@ public class PoeTradeService
     /// <summary>
     /// 从候选 stat ID 列表中，按期望分类优先挑选，找不到则回退到第一个。
     /// </summary>
-    private static string PickStatByCategory(List<(string id, string category)> candidates, string expectedCategory, string modText)
+    private static string PickStatByCategory(List<(string Id, string Category)> candidates, string expectedCategory, string modText)
     {
         if (!string.IsNullOrEmpty(expectedCategory))
         {
-            var matched = candidates.FirstOrDefault(c => c.category == expectedCategory);
-            if (matched.id != null)
+            var matched = candidates.FirstOrDefault(c => c.Category == expectedCategory);
+            if (matched.Id != null)
             {
                 if (candidates.Count > 1)
                 {
-                    AppLogger.Instance.Info($"词缀分类匹配：'{modText}' 期望={expectedCategory}, 命中 {matched.id}（候选共 {candidates.Count} 个）");
+                    AppLogger.Instance.Info($"词缀分类匹配：'{modText}' 期望={expectedCategory}, 命中 {matched.Id}（候选共 {candidates.Count} 个）");
                 }
-                return matched.id;
+                return matched.Id;
             }
-            // 期望分类未命中，记录以便诊断。
             if (candidates.Count > 1)
             {
-                var allCats = string.Join(",", candidates.Select(c => c.category));
+                var allCats = string.Join(",", candidates.Select(c => c.Category));
                 AppLogger.Instance.Warn($"词缀分类未命中：'{modText}' 期望={expectedCategory}, 实际候选分类=[{allCats}], 回退到第一个");
             }
         }
-        return candidates[0].id;
+        return candidates[0].Id;
     }
 
     /// <summary>
@@ -445,27 +704,10 @@ public class PoeTradeService
     }
 
     /// <summary>
-    /// 归一化词缀文本：去掉 "(...)" 范围，将数字替换为 #。
-    /// 例如 "+294 (262-300) 点闪避值" → "+# 点闪避值"
+    /// 将 stats 缓存以易读的 JSON 格式写出到 data/stats_cache_debug.json。
+    /// 按分类分组、按文本排序，便于人工查找。
     /// </summary>
-    private static string NormalizeModText(string text)
-    {
-        // 去掉 (xxx) 范围标注。
-        var noRange = RangeRegex.Replace(text, "");
-        // 将数字替换为 #。
-        var normalized = NumberRegex.Replace(noRange, "#");
-        // 统一去掉 +# 中的 + 号：API stat 文本通常不带 + 号（# 已表示正数），
-        // 但游戏内显示的词缀会带 + 号，不处理会导致精确匹配失败。
-        normalized = normalized.Replace("+#", "#");
-        return normalized.Trim();
-    }
-
-    /// <summary>
-    /// 将 stats 缓存以易读的 JSON 格式写出到 data/stats_cache_debug.json，
-    /// 方便人工查看每个归一化文本对应的全部 stat ID 与分类前缀。
-    /// 写出失败不影响主流程。
-    /// </summary>
-    private static void DumpStatsCacheToFile(Dictionary<string, List<(string id, string category)>> cache)
+    private static void DumpStatsCacheToFile(List<StatEntry> stats)
     {
         try
         {
@@ -473,12 +715,13 @@ public class PoeTradeService
             System.IO.Directory.CreateDirectory(dataDir);
             var cachePath = System.IO.Path.Combine(dataDir, "stats_cache_debug.json");
 
-            // 按分类前缀分组、再按文本排序，便于人工查找。
-            var dumpObj = cache
-                .OrderBy(kv => kv.Key)
+            // 按文本分组，每个文本对应所有分类的 stat ID。
+            var dumpObj = stats
+                .GroupBy(e => e.Text)
+                .OrderBy(g => g.Key)
                 .ToDictionary(
-                    kv => kv.Key,
-                    kv => kv.Value.OrderBy(v => v.category).Select(v => new { id = v.id, category = v.category }));
+                    g => g.Key,
+                    g => g.OrderBy(v => v.Category).Select(v => new { id = v.Id, category = v.Category }));
 
             var options = new JsonSerializerOptions
             {
@@ -487,7 +730,7 @@ public class PoeTradeService
             };
             var dumpJson = JsonSerializer.Serialize(dumpObj, options);
             System.IO.File.WriteAllText(cachePath, dumpJson);
-            AppLogger.Instance.Info($"stats 缓存已写出：{cachePath}（{cache.Count} 条）");
+            AppLogger.Instance.Info($"stats 缓存已写出：{cachePath}（{stats.Count} 条）");
         }
         catch (Exception ex)
         {
@@ -538,15 +781,9 @@ public class PoeTradeService
             var idsParam = string.Join(",", ids);
             var url = $"{BaseUrl}/fetch/{idsParam}?query={Uri.EscapeDataString(searchId)}";
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            AddCommonHeaders(request, sessionId);
-
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var json = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
+            var json = await SendWithRateLimitAsync(url, HttpMethod.Get, null, sessionId, cancellationToken);
+            if (string.IsNullOrEmpty(json))
             {
-                AppLogger.Instance.Warn($"交易取详情失败：{(int)response.StatusCode} {json}");
                 return [];
             }
 
@@ -557,6 +794,62 @@ public class PoeTradeService
             await Task.Delay(RequestDelayMs, cancellationToken);
             _rateLimiter.Release();
         }
+    }
+
+    /// <summary>
+    /// 发送请求并在收到 429 限流时按 Retry-After 头等待后重试一次。
+    /// 参考 xiletrade-master PoeApiService.ApplyCooldown：根据响应头驱动退避。
+    /// </summary>
+    private async Task<string> SendWithRateLimitAsync(
+        string url, HttpMethod method, string? jsonBody, string? sessionId, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var request = new HttpRequestMessage(method, url);
+            if (jsonBody != null)
+            {
+                request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            }
+            AddCommonHeaders(request, sessionId);
+
+            using var response = await _httpClient.SendAsync(request, ct);
+            var json = await response.Content.ReadAsStringAsync(ct);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests && attempt == 0)
+            {
+                var retryAfter = GetRetryAfterSeconds(response);
+                AppLogger.Instance.Warn($"收到 429 限流，等待 {retryAfter} 秒后重试");
+                await Task.Delay(TimeSpan.FromSeconds(retryAfter), ct);
+                continue;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                AppLogger.Instance.Warn($"交易请求失败：{(int)response.StatusCode} {json}");
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    throw new HttpRequestException("POESESSID 无效或已过期，请在设置页重新登录获取。");
+                }
+                return "";
+            }
+
+            return json;
+        }
+        return "";
+    }
+
+    /// <summary>解析 Retry-After 响应头（秒），无则返回默认退避秒数。</summary>
+    private static int GetRetryAfterSeconds(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("Retry-After", out var values))
+        {
+            var val = values.FirstOrDefault();
+            if (int.TryParse(val, out var sec) && sec > 0)
+            {
+                return sec;
+            }
+        }
+        return RateLimitBackoffSec;
     }
 
     private static List<TradeListing> ParseFetchResponse(string json)
@@ -846,6 +1139,11 @@ public class PoeTradeService
     private void AddCommonHeaders(HttpRequestMessage request, string? sessionId)
     {
         request.Headers.TryAddWithoutValidation("User-Agent", "Poe2PriceGui/1.0");
+        // POST 请求需要 Accept 头（参考 xiletrade-master NetService.SendHTTP）。
+        if (request.Method == HttpMethod.Post)
+        {
+            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+        }
         // 国服交易接口需要 Origin/Referer 头通过 CSRF 校验；国际服使用 pathofexile.com。
         if (IsChina)
         {

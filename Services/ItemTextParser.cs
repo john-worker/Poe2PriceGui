@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.RegularExpressions;
 
 namespace Poe2PriceGui.Services;
@@ -36,8 +37,44 @@ public static class ItemTextParser
         @"(?:插槽|Sockets)\s*:?\s*(.+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // 品质正则：匹配 "品质: +20%" 或 "Quality: +20%"
+    private static readonly Regex QualityRegex = new(
+        @"(?:品质|Quality)\s*:?\s*([+-]?\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // 护甲正则：匹配 "护甲值: 2673" / "护甲: 2673" / "Armour: 2673"
+    private static readonly Regex ArmourRegex = new(
+        @"(?:护甲值?|Armour)\s*:?\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // 闪避正则：匹配 "闪避值: 2673" / "Evasion Rating: 2673" / "Evasion: 2673"
+    private static readonly Regex EvasionRegex = new(
+        @"(?:闪避值?|Evasion\s*Rating|Evasion)\s*:?\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // 能量护盾正则：匹配 "能量护盾: 2673" / "Energy Shield: 2673"
+    private static readonly Regex EnergyShieldRegex = new(
+        @"(?:能量护盾|Energy\s*Shield)\s*:?\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // 每秒总伤害正则：匹配 "每秒总伤害: 200" / "每秒伤害: 200" / "DPS: 200" / "Damage per Second: 200"
+    private static readonly Regex DpsTotalRegex = new(
+        @"(?:每秒总伤害|每秒伤害|DPS|Damage\s*per\s*Second)\s*:?\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // 每秒物理伤害正则：匹配 "每秒物理伤害: 120" / "Physical DPS: 120" / "Phys DPS: 120"
+    private static readonly Regex DpsPhysRegex = new(
+        @"(?:每秒物理伤害|Physical\s*DPS|Phys\s*DPS|Pdps)\s*:?\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // 每秒元素伤害正则：匹配 "每秒元素伤害: 80" / "Elemental DPS: 80" / "Elem DPS: 80" / "Edps: 80"
+    private static readonly Regex DpsElemRegex = new(
+        @"(?:每秒元素伤害|Elemental\s*DPS|Elem\s*DPS|Edps)\s*:?\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// 解析装备文本，提取稀有度、名称、基础类型、物品等级、需求等级等字段。
+    /// 先经过 NormalizeItemText 标准化预处理，再走原有解析逻辑。
     /// </summary>
     public static ItemInfo Parse(string text)
     {
@@ -47,7 +84,10 @@ public static class ItemTextParser
             return info;
         }
 
-        var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+        // 标准化预处理：统一行尾、移除空括号、解析 [key|value]、移除价格行。
+        var normalizedText = NormalizeItemText(text.AsSpan());
+        var lines = normalizedText
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(l => l.Trim())
             .ToList();
 
@@ -79,6 +119,7 @@ public static class ItemTextParser
             info.BaseType = info.Name;
             info.Rarity = "Unknown";
             ParseNumericFields(lines, info);
+            ParseItemFlags(lines, info);
             ParseMods(lines, info);
             return info;
         }
@@ -99,6 +140,7 @@ public static class ItemTextParser
         if (nameLines.Count == 0)
         {
             ParseNumericFields(lines, info);
+            ParseItemFlags(lines, info);
             ParseMods(lines, info);
             return info;
         }
@@ -107,8 +149,119 @@ public static class ItemTextParser
         info.BaseType = nameLines.Count > 1 ? nameLines[1] : nameLines[0];
 
         ParseNumericFields(lines, info);
+        ParseItemFlags(lines, info);
         ParseMods(lines, info);
         return info;
+    }
+
+    /// <summary>
+    /// 标准化物品文本：统一 CRLF 行尾、移除空括号 ()、解析 [key|value] 标记、移除价格行。
+    /// 参考 xiletrade-master/InfoDescription.cs 的 NormalizeItemText 实现。
+    /// </summary>
+    private static string NormalizeItemText(ReadOnlySpan<char> input)
+    {
+        char[] buffer = ArrayPool<char>.Shared.Rent(input.Length * 2);
+        int len = 0;
+
+        // 1. 行尾标准化 + 移除空括号 "()"
+        for (int i = 0; i < input.Length; i++)
+        {
+            char c = input[i];
+
+            // 移除 "()"
+            if (c is '(' && i + 1 < input.Length && input[i + 1] is ')')
+            {
+                i++;
+                continue;
+            }
+
+            // 行尾标准化：统一为 CRLF
+            if (c is '\r')
+            {
+                if (i + 1 < input.Length && input[i + 1] is '\n')
+                {
+                    buffer[len++] = '\r';
+                    buffer[len++] = '\n';
+                    i++;
+                }
+                else
+                {
+                    // 孤独的 \r 也转为 CRLF
+                    buffer[len++] = '\r';
+                    buffer[len++] = '\n';
+                }
+                continue;
+            }
+
+            if (c is '\n')
+            {
+                buffer[len++] = '\r';
+                buffer[len++] = '\n';
+                continue;
+            }
+
+            buffer[len++] = c;
+        }
+
+        Span<char> span = buffer.AsSpan(0, len);
+
+        // 2. 解析 [key|value] 标记 → value
+        Span<char> bracketParsed = span.Length <= 2048
+            ? stackalloc char[span.Length] : new char[span.Length];
+        int write = 0;
+        int j = 0;
+        while (j < span.Length)
+        {
+            if (span[j] is '[')
+            {
+                int start = j + 1;
+                int endRel = span[start..].IndexOf(']');
+                if (endRel < 0)
+                {
+                    bracketParsed[write++] = span[j++];
+                    continue;
+                }
+                int end = start + endRel;
+                int pipeRel = span.Slice(start, endRel).IndexOf('|');
+                ReadOnlySpan<char> part = pipeRel >= 0
+                    ? span[(start + pipeRel + 1)..end]
+                    : span[start..end];
+                part.CopyTo(bracketParsed[write..]);
+                write += part.Length;
+                j = end + 1;
+                continue;
+            }
+            bracketParsed[write++] = span[j++];
+        }
+
+        ReadOnlySpan<char> trimSpan = bracketParsed[..write];
+
+        // 3. 全局 Trim
+        int startTrim = 0;
+        int endTrim = trimSpan.Length - 1;
+        while (startTrim <= endTrim && char.IsWhiteSpace(trimSpan[startTrim])) startTrim++;
+        while (endTrim >= startTrim && char.IsWhiteSpace(trimSpan[endTrim])) endTrim--;
+        ReadOnlySpan<char> finalSpan = startTrim > endTrim
+            ? trimSpan
+            : trimSpan.Slice(startTrim, endTrim - startTrim + 1);
+
+        // 4. 移除价格行（最后一行包含 ~b/o 或 price）
+        string delimiter = "\r\n";
+        int lastPos = finalSpan.LastIndexOf(delimiter);
+        if (lastPos >= 0)
+        {
+            ReadOnlySpan<char> lastLine = finalSpan[(lastPos + delimiter.Length)..];
+            if (lastLine.Contains("~b/o", StringComparison.OrdinalIgnoreCase) ||
+                lastLine.Contains("price", StringComparison.OrdinalIgnoreCase) ||
+                lastLine.Contains("注价", StringComparison.OrdinalIgnoreCase))
+            {
+                finalSpan = finalSpan[..lastPos];
+            }
+        }
+
+        var result = finalSpan.ToString();
+        ArrayPool<char>.Shared.Return(buffer, clearArray: true);
+        return result;
     }
 
     /// <summary>
@@ -216,6 +369,100 @@ public static class ItemTextParser
                     var tokens = m.Groups[1].Value.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
                     info.SocketCount = tokens.Length;
                 }
+            }
+
+            // 品质（"品质: +20%" → 20）
+            if (info.Quality == 0)
+            {
+                var m = QualityRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var q))
+                {
+                    info.Quality = q;
+                }
+            }
+
+            // 护甲值（参考 xiletrade-master equipment_filters.filters.ar）
+            if (info.Armour == 0)
+            {
+                var m = ArmourRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var ar))
+                {
+                    info.Armour = ar;
+                }
+            }
+
+            // 闪避值（参考 xiletrade-master equipment_filters.filters.ev）
+            if (info.Evasion == 0)
+            {
+                var m = EvasionRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var ev))
+                {
+                    info.Evasion = ev;
+                }
+            }
+
+            // 能量护盾（参考 xiletrade-master equipment_filters.filters.es）
+            if (info.EnergyShield == 0)
+            {
+                var m = EnergyShieldRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var es))
+                {
+                    info.EnergyShield = es;
+                }
+            }
+
+            // 每秒总伤害（参考 xiletrade-master equipment_filters.filters.dps）
+            if (info.DpsTotal == 0)
+            {
+                var m = DpsTotalRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var dps))
+                {
+                    info.DpsTotal = dps;
+                }
+            }
+
+            // 每秒物理伤害（参考 xiletrade-master equipment_filters.filters.pdps）
+            if (info.DpsPhys == 0)
+            {
+                var m = DpsPhysRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var pdps))
+                {
+                    info.DpsPhys = pdps;
+                }
+            }
+
+            // 每秒元素伤害（参考 xiletrade-master equipment_filters.filters.edps）
+            if (info.DpsElem == 0)
+            {
+                var m = DpsElemRegex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var edps))
+                {
+                    info.DpsElem = edps;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 解析物品标志：已腐化 / 未鉴定等。
+    /// 参考 xiletrade-master ItemFlag.cs 的标志扫描逻辑。
+    /// </summary>
+    private static void ParseItemFlags(List<string> lines, ItemInfo info)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains("已腐化", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Corrupted", StringComparison.OrdinalIgnoreCase))
+            {
+                info.Corrupted = true;
+            }
+
+            // "未鉴定" / "Unidentified" 表示物品未鉴定。
+            // 注意：默认 Identified=true，只有明确出现"未鉴定"才置 false。
+            if (line.Contains("未鉴定", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Unidentified", StringComparison.OrdinalIgnoreCase))
+            {
+                info.Identified = false;
             }
         }
     }

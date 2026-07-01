@@ -42,7 +42,8 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _priceCheckerEnabled;
     private string _priceCheckerHotkey = "Ctrl+D";
     private string _priceCheckerPoeSessionId = "";
-    private string _priceCheckerLeague = "奥杜尔秘符";
+    private string _priceCheckerLeague = "";
+    private ObservableCollection<string> _availableLeagues = new();
     private string _currencyPriceToken = "789486ce3baf2c4a7e18f4ba0b9aa4ab8edb9da64ca92bca10ca74c094cd8f8d";
     private ListCollectionView _filteredPrices = new(new ObservableCollection<PoecurrencyItem>());
     private PriceOverlayWindow? _currentOverlay;
@@ -72,6 +73,9 @@ public class MainViewModel : INotifyPropertyChanged
         RefreshDetectedGameMode();
         RebuildPriceAndTradeServices();
 
+        // 异步获取赛季列表，校正当前赛季名（不阻塞构造函数）。
+        _ = Task.Run(async () => await ValidateLeagueAsync());
+
         _iconCacheService = new IconCacheService(_httpClient);
         _priceDataService = new PriceDataService();
         _toastService = new ToastService();
@@ -95,6 +99,9 @@ public class MainViewModel : INotifyPropertyChanged
         CaptureHotkeyCommand = new RelayCommand(CaptureHotkey);
         TestPriceCheckerCommand = new RelayCommand(async () => await TestPriceCheckerAsync(), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
         TestPriceCheckerQuiverCommand = new RelayCommand(async () => await TestPriceCheckerAsync("quiver"), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
+        TestPriceCheckerSpearCommand = new RelayCommand(async () => await TestPriceCheckerAsync("spear"), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
+        TestPriceCheckerCharmCommand = new RelayCommand(async () => await TestPriceCheckerAsync("charm"), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
+        TestPriceCheckerArmourCommand = new RelayCommand(async () => await TestPriceCheckerAsync("armour"), () => !IsBusy && !string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId));
         CheckForUpdateCommand = new RelayCommand(async () => await CheckForUpdateAsync(), () => !IsBusy);
         ForceSwitchServerCommand = new RelayCommand(ForceSwitchServer, () => !IsBusy);
 
@@ -207,6 +214,9 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand CaptureHotkeyCommand { get; }
     public ICommand TestPriceCheckerCommand { get; }
     public ICommand TestPriceCheckerQuiverCommand { get; }
+    public ICommand TestPriceCheckerSpearCommand { get; }
+    public ICommand TestPriceCheckerCharmCommand { get; }
+    public ICommand TestPriceCheckerArmourCommand { get; }
     public ICommand CheckForUpdateCommand { get; }
     public ICommand ForceSwitchServerCommand { get; }
 
@@ -324,9 +334,20 @@ public class MainViewModel : INotifyPropertyChanged
                 _settingsService.Save(_settings);
                 ((RelayCommand)ExportStatsCacheCommand).RaiseCanExecuteChanged();
                 ((RelayCommand)TestPriceCheckerCommand).RaiseCanExecuteChanged();
+                ((RelayCommand)TestPriceCheckerQuiverCommand).RaiseCanExecuteChanged();
+                ((RelayCommand)TestPriceCheckerSpearCommand).RaiseCanExecuteChanged();
+                ((RelayCommand)TestPriceCheckerCharmCommand).RaiseCanExecuteChanged();
+                ((RelayCommand)TestPriceCheckerArmourCommand).RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(IsLoggedIn));
                 OnPropertyChanged(nameof(LoginStatusText));
                 OnPropertyChanged(nameof(LoginStatusColor));
+
+                // 后台预加载 stats 数据，避免首次查价时阻塞。
+                // 参考 xiletrade-master 启动时同步加载所有静态数据到内存。
+                if (!string.IsNullOrWhiteSpace(value) && _tradeService != null)
+                {
+                    _ = _tradeService.PreloadStatsAsync(value);
+                }
             }
         }
     }
@@ -354,6 +375,15 @@ public class MainViewModel : INotifyPropertyChanged
                 _settingsService.Save(_settings);
             }
         }
+    }
+
+    /// <summary>
+    /// 可用赛季列表（从 API 动态获取），绑定到设置页下拉框。
+    /// </summary>
+    public ObservableCollection<string> AvailableLeagues
+    {
+        get => _availableLeagues;
+        private set => SetProperty(ref _availableLeagues, value);
     }
 
     /// <summary>通货价格查询 Token，为空时使用公共接口，非空时使用 summary_validate 接口。</summary>
@@ -418,52 +448,8 @@ public class MainViewModel : INotifyPropertyChanged
             }
 
             // 构建可选搜索字段。
-            var fields = new ObservableCollection<SearchField>();
-
-            // 传奇物品默认选「名称」，其它默认选「基底」。
-            if (itemInfo.IsUnique)
-            {
-                fields.Add(new SearchField { Label = "名称", Key = "name", Value = itemInfo.Name, IsSelected = true });
-                // 即使 BaseType == Name（未鉴定或只有一行名称），也提供基底选项让用户可切换。
-                if (!string.IsNullOrWhiteSpace(itemInfo.BaseType))
-                {
-                    fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = false });
-                }
-            }
-            else
-            {
-                fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = true });
-            }
-
-            // 物品等级（可作为筛选条件）。
-            if (itemInfo.ItemLevel > 0)
-            {
-                fields.Add(new SearchField { Label = "物品等级", Key = "itemLevel", Value = itemInfo.ItemLevel.ToString(), IsSelected = false, IsNumeric = true });
-            }
-
-            // 稀有度。
-            if (!string.IsNullOrWhiteSpace(itemInfo.Rarity) && itemInfo.Rarity != "Unknown")
-            {
-                fields.Add(new SearchField { Label = "稀有度", Key = "rarity", Value = itemInfo.Rarity, IsSelected = false });
-            }
-
-            // 插槽数量（用于搜索卓越装备等）。
-            if (itemInfo.SocketCount > 0)
-            {
-                fields.Add(new SearchField { Label = "插槽", Key = "sockets", Value = itemInfo.SocketCount.ToString(), IsSelected = false, IsNumeric = true });
-            }
-
-            // 需求等级。
-            if (itemInfo.RequiredLevel > 0)
-            {
-                fields.Add(new SearchField { Label = "需求等级", Key = "reqLevel", Value = itemInfo.RequiredLevel.ToString(), IsSelected = false, IsNumeric = true });
-            }
-
-            // 物品类别。
-            if (!string.IsNullOrWhiteSpace(itemInfo.ItemClass))
-            {
-                fields.Add(new SearchField { Label = "类别", Key = "category", Value = itemInfo.ItemClass, IsSelected = false });
-            }
+            var fields = BuildSearchFields(itemInfo);
+            ApplyDefaultModSelection(itemInfo);
 
             var viewModel = new PriceOverlayViewModel
             {
@@ -522,6 +508,108 @@ public class MainViewModel : INotifyPropertyChanged
 --------
 引路石掉落";
             }
+            else if (testItem == "spear")
+            {
+                testLabel = "苍穹裂片";
+                itemText = @"物品类别: 战矛
+稀有度: 传奇
+苍穹裂片
+飞翼长矛
+--------
+闪电伤害: 1 或 91 (lightning)
+暴击率: 5.00%
+每秒攻击次数: 2.36 (augmented)
+--------
+需求： 等级 16, 12 力量, 25 敏捷
+--------
+插槽: S
+--------
+物品等级: 79
+--------
+攻击速度提高 5% (rune)
+--------
+获得技能: 战矛飞掷
+--------
+{ 传奇属性 — 伤害, 物理, 攻击 }
+没有物理伤害
+{ 传奇属性 — 伤害, 元素, 闪电, 攻击 }
+附加 1 - 91 (80-120) 闪电伤害
+{ 传奇属性 — 攻击, 速度 }
+攻击速度提高 34 (15-30)%
+{ 传奇属性 — 元素, 闪电, 异常状态 }
+感电几率提高 57 (50-100)%
+{ 传奇属性 — 伤害 }
+每一种伤害类型只能重置伤害的下限或上限 — 数值不可调整
+--------
+首级滚落杀害，星辰坠落天际。
+--------
+被腐化";
+            }
+            else if (testItem == "charm")
+            {
+                testLabel = "仪式通道";
+                itemText = @"物品类别: 咒符
+稀有度: 传奇
+仪式通道
+黄金咒符
+--------
+持续 1 秒
+每次使用会从 80 充能次数中消耗 80 次
+目前有 40 充能次数
+物品稀有度提高 15%
+--------
+需求： 等级 50
+--------
+物品等级: 81
+--------
+{ 基底属性 }
+当你击败稀有或传奇敌人时使用 — 数值不可调整
+--------
+{ 传奇属性 — 咒符 }
+使用时被豹之灵附身 19 (10-20) 秒
+--------
+要想成为战士和猎手，每个年轻的
+阿兹莫里人都必须在万灵面前证明自己。
+--------
+满足条件时自动使用。只有装备于腰带上时才会充能。可通过水井或击败怪物补充。
+--------
+引路石掉落";
+            }
+            else if (testItem == "armour")
+            {
+                testLabel = "祸害 魔甲";
+                itemText = @"物品类别: 护甲
+稀有度: 稀有
+祸害 魔甲
+滑击背心
+--------
+品质: +20% (augmented)
+闪避值: 2673 (augmented)
+--------
+需求： 等级 70, 121 敏捷
+--------
+插槽: S S
+--------
+物品等级: 81
+--------
+护甲、闪避和能量护盾提高 40% (rune)
+--------
+{ 前缀属性 ""易变的"" (等阶：1) — 闪避 }
++294 (262-300) 点闪避值
+{ 亵渎的 前缀属性 ""公羊的"" (等阶：3) — 生命, 闪避 }
+闪避值提高 29 (27-32)%
++32 (26-32) 生命上限
+{ 前缀属性 ""幻迷的"" (等阶：1) — 闪避 }
+闪避值提高 105 (101-110)%
+{ 后缀属性 ""岩浆之"" (等阶：2) — 元素, 火焰, 抗性 }
+火焰抗性 +37 (36-40)%
+{ 后缀属性 ""挠曲之"" (等阶：2) — 闪避 }
+获得相当于闪避值 22 (21-23)% 的偏转值
+{ 打造的 后缀属性 ""台风之"" (等阶：3) — 元素, 闪电, 抗性 }
+闪电抗性 +35 (31-35)%
+--------
+引路石掉落";
+            }
             else
             {
                 testLabel = "猎首";
@@ -559,41 +647,8 @@ public class MainViewModel : INotifyPropertyChanged
                 return;
             }
 
-            var fields = new ObservableCollection<SearchField>();
-
-            if (itemInfo.IsUnique)
-            {
-                fields.Add(new SearchField { Label = "名称", Key = "name", Value = itemInfo.Name, IsSelected = true });
-                // 即使 BaseType == Name（未鉴定或只有一行名称），也提供基底选项让用户可切换。
-                if (!string.IsNullOrWhiteSpace(itemInfo.BaseType))
-                {
-                    fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = false });
-                }
-            }
-            else
-            {
-                fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = true });
-            }
-
-            if (itemInfo.ItemLevel > 0)
-            {
-                fields.Add(new SearchField { Label = "物品等级", Key = "itemLevel", Value = itemInfo.ItemLevel.ToString(), IsSelected = false, IsNumeric = true });
-            }
-
-            if (!string.IsNullOrWhiteSpace(itemInfo.Rarity) && itemInfo.Rarity != "Unknown")
-            {
-                fields.Add(new SearchField { Label = "稀有度", Key = "rarity", Value = itemInfo.Rarity, IsSelected = false });
-            }
-
-            if (itemInfo.RequiredLevel > 0)
-            {
-                fields.Add(new SearchField { Label = "需求等级", Key = "reqLevel", Value = itemInfo.RequiredLevel.ToString(), IsSelected = false, IsNumeric = true });
-            }
-
-            if (!string.IsNullOrWhiteSpace(itemInfo.ItemClass))
-            {
-                fields.Add(new SearchField { Label = "类别", Key = "category", Value = itemInfo.ItemClass, IsSelected = false });
-            }
+            var fields = BuildSearchFields(itemInfo);
+            ApplyDefaultModSelection(itemInfo);
 
             var viewModel = new PriceOverlayViewModel
             {
@@ -617,6 +672,123 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 构建可选搜索字段。参考 xiletrade-master GetTypeFilters：
+    /// name/type/itemLevel/rarity/quality/sockets/reqLevel/category/corrupted/identified。
+    /// </summary>
+    private static ObservableCollection<SearchField> BuildSearchFields(ItemInfo itemInfo)
+    {
+        var fields = new ObservableCollection<SearchField>();
+
+        // 传奇物品默认选「名称」，其它默认选「基底」。
+        if (itemInfo.IsUnique)
+        {
+            fields.Add(new SearchField { Label = "名称", Key = "name", Value = itemInfo.Name, IsSelected = true });
+            if (!string.IsNullOrWhiteSpace(itemInfo.BaseType))
+            {
+                fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = false });
+            }
+        }
+        else
+        {
+            fields.Add(new SearchField { Label = "基底", Key = "type", Value = itemInfo.BaseType, IsSelected = true });
+        }
+
+        if (itemInfo.ItemLevel > 0)
+        {
+            fields.Add(new SearchField { Label = "物品等级", Key = "itemLevel", Value = itemInfo.ItemLevel.ToString(), IsSelected = false, IsNumeric = true });
+        }
+
+        if (!string.IsNullOrWhiteSpace(itemInfo.Rarity) && itemInfo.Rarity != "Unknown")
+        {
+            fields.Add(new SearchField { Label = "稀有度", Key = "rarity", Value = itemInfo.Rarity, IsSelected = false });
+        }
+
+        // 品质（参考 xiletrade type_filters.filters.quality）。
+        if (itemInfo.Quality > 0)
+        {
+            fields.Add(new SearchField { Label = "品质", Key = "quality", Value = itemInfo.Quality.ToString(), IsSelected = false, IsNumeric = true });
+        }
+
+        // 装备数值（参考 xiletrade-master GetEquipmentFilters：ar/es/ev/dps/pdps/edps）。
+        if (itemInfo.Armour > 0)
+        {
+            fields.Add(new SearchField { Label = "护甲", Key = "armour", Value = itemInfo.Armour.ToString(), IsSelected = false, IsNumeric = true });
+        }
+        if (itemInfo.Evasion > 0)
+        {
+            fields.Add(new SearchField { Label = "闪避", Key = "evasion", Value = itemInfo.Evasion.ToString(), IsSelected = false, IsNumeric = true });
+        }
+        if (itemInfo.EnergyShield > 0)
+        {
+            fields.Add(new SearchField { Label = "能量护盾", Key = "energyShield", Value = itemInfo.EnergyShield.ToString(), IsSelected = false, IsNumeric = true });
+        }
+        if (itemInfo.DpsTotal > 0)
+        {
+            fields.Add(new SearchField { Label = "总DPS", Key = "dpsTotal", Value = itemInfo.DpsTotal.ToString(), IsSelected = false, IsNumeric = true });
+        }
+        if (itemInfo.DpsPhys > 0)
+        {
+            fields.Add(new SearchField { Label = "物理DPS", Key = "dpsPhys", Value = itemInfo.DpsPhys.ToString(), IsSelected = false, IsNumeric = true });
+        }
+        if (itemInfo.DpsElem > 0)
+        {
+            fields.Add(new SearchField { Label = "元素DPS", Key = "dpsElem", Value = itemInfo.DpsElem.ToString(), IsSelected = false, IsNumeric = true });
+        }
+
+        if (itemInfo.SocketCount > 0)
+        {
+            fields.Add(new SearchField { Label = "插槽", Key = "sockets", Value = itemInfo.SocketCount.ToString(), IsSelected = false, IsNumeric = true });
+        }
+
+        if (itemInfo.RequiredLevel > 0)
+        {
+            fields.Add(new SearchField { Label = "需求等级", Key = "reqLevel", Value = itemInfo.RequiredLevel.ToString(), IsSelected = false, IsNumeric = true });
+        }
+
+        if (!string.IsNullOrWhiteSpace(itemInfo.ItemClass))
+        {
+            fields.Add(new SearchField { Label = "类别", Key = "category", Value = itemInfo.ItemClass, IsSelected = false });
+        }
+
+        // 已腐化（参考 xiletrade misc_filters.corrupted）。
+        if (itemInfo.Corrupted)
+        {
+            fields.Add(new SearchField { Label = "已腐化", Key = "corrupted", Value = "true", IsSelected = false });
+        }
+
+        // 已鉴定（参考 xiletrade misc_filters.identified）。
+        // 只有未鉴定物品才显示此选项，让用户可选择搜索未鉴定物品。
+        if (!itemInfo.Identified)
+        {
+            fields.Add(new SearchField { Label = "未鉴定", Key = "unidentified", Value = "true", IsSelected = false });
+        }
+
+        return fields;
+    }
+
+    /// <summary>
+    /// 词缀默认勾选逻辑。参考 xiletrade-master ModLineViewModel.GetModSelection：
+    /// - 显式属性（前缀/后缀/传奇/显式）→ 默认勾选
+    /// - 隐式属性（基底/隐式）→ 默认不勾选
+    /// - 打造属性 → 默认不勾选
+    /// </summary>
+    private static void ApplyDefaultModSelection(ItemInfo itemInfo)
+    {
+        if (itemInfo.Mods == null || itemInfo.Mods.Count == 0) return;
+
+        foreach (var mod in itemInfo.Mods)
+        {
+            mod.IsSelected = mod.Type switch
+            {
+                "前缀属性" or "后缀属性" or "传奇属性" or "显式属性" or "Explicit" or "Prefix" or "Suffix" => true,
+                "基底属性" or "隐式属性" or "Implicit" => false,
+                "打造属性" or "Crafted" => false,
+                _ => false
+            };
+        }
+    }
+
+    /// <summary>
     /// 叠加层搜索回调：根据选中的字段执行搜索并显示结果。
     /// </summary>
     private async Task ExecuteOverlaySearchAsync(PriceOverlayViewModel vm)
@@ -634,10 +806,23 @@ public class MainViewModel : INotifyPropertyChanged
             var typeField = selectedFields.FirstOrDefault(f => f.Key == "type");
             var itemLevelField = selectedFields.FirstOrDefault(f => f.Key == "itemLevel");
             var rarityField = selectedFields.FirstOrDefault(f => f.Key == "rarity");
+            var qualityField = selectedFields.FirstOrDefault(f => f.Key == "quality");
+            var corruptedField = selectedFields.FirstOrDefault(f => f.Key == "corrupted");
+            var unidentifiedField = selectedFields.FirstOrDefault(f => f.Key == "unidentified");
+            var armourField = selectedFields.FirstOrDefault(f => f.Key == "armour");
+            var evasionField = selectedFields.FirstOrDefault(f => f.Key == "evasion");
+            var energyShieldField = selectedFields.FirstOrDefault(f => f.Key == "energyShield");
+            var dpsTotalField = selectedFields.FirstOrDefault(f => f.Key == "dpsTotal");
+            var dpsPhysField = selectedFields.FirstOrDefault(f => f.Key == "dpsPhys");
+            var dpsElemField = selectedFields.FirstOrDefault(f => f.Key == "dpsElem");
 
             // 确定搜索词：优先 name，其次 type。
             var searchTerm = nameField?.Value ?? typeField?.Value ?? "";
             var searchByType = nameField == null && typeField != null;
+
+            // 基底类型：用于传奇物品搜索时同时传 type 字段（参考 xiletrade-master）。
+            // 即使 type 未选中，也从所有字段中取，因为传奇搜索需要同时传 name+type。
+            var baseTypeValue = vm.SearchFields.FirstOrDefault(f => f.Key == "type")?.Value;
 
             if (string.IsNullOrWhiteSpace(searchTerm))
             {
@@ -651,7 +836,23 @@ public class MainViewModel : INotifyPropertyChanged
                 itemLevel = il;
             }
 
+            int? quality = null;
+            if (qualityField != null && int.TryParse(qualityField.Value, out var q))
+            {
+                quality = q;
+            }
+
+            // 装备数值（参考 xiletrade-master GetEquipmentFilters：ar/es/ev/dps/pdps/edps）。
+            int? armour = armourField != null && int.TryParse(armourField.Value, out var ar) ? ar : null;
+            int? evasion = evasionField != null && int.TryParse(evasionField.Value, out var ev) ? ev : null;
+            int? energyShield = energyShieldField != null && int.TryParse(energyShieldField.Value, out var es) ? es : null;
+            int? dpsTotal = dpsTotalField != null && int.TryParse(dpsTotalField.Value, out var dps) ? dps : null;
+            int? dpsPhys = dpsPhysField != null && int.TryParse(dpsPhysField.Value, out var pdps) ? pdps : null;
+            int? dpsElem = dpsElemField != null && int.TryParse(dpsElemField.Value, out var edps) ? edps : null;
+
             string? rarity = rarityField?.Value;
+            bool? corrupted = corruptedField != null ? true : null;
+            bool? identified = unidentifiedField != null ? false : null;
 
             // 收集选中的词缀（文本 + 类型，类型用于映射到正确的 stat 分类）。
             var selectedMods = vm.ItemInfo?.Mods?
@@ -662,10 +863,11 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 selectedMods = null;
             }
+            
 
             var isExactSearch = vm.IsExactSearch;
 
-            AppLogger.Instance.Info($"叠加层搜索：league={PriceCheckerLeague}, term={searchTerm}, byType={searchByType}, ilvl={itemLevel}, rarity={rarity}, mods={selectedMods?.Count ?? 0}, exact={isExactSearch}");
+            AppLogger.Instance.Info($"叠加层搜索：league={PriceCheckerLeague}, term={searchTerm}, byType={searchByType}, ilvl={itemLevel}, qual={quality}, ar={armour}, ev={evasion}, es={energyShield}, dps={dpsTotal}/{dpsPhys}/{dpsElem}, rarity={rarity}, corrupt={corrupted}, ident={identified}, mods={selectedMods?.Count ?? 0}, exact={isExactSearch}");
 
             TradeSearchResult searchResult;
             try
@@ -675,10 +877,20 @@ public class MainViewModel : INotifyPropertyChanged
                     searchTerm,
                     PriceCheckerPoeSessionId,
                     searchByType: searchByType,
+                    baseType: baseTypeValue,
                     itemLevel: itemLevel,
                     rarity: rarity,
                     selectedMods: selectedMods,
-                    isExactSearch: isExactSearch);
+                    isExactSearch: isExactSearch,
+                    quality: quality,
+                    corrupted: corrupted,
+                    identified: identified,
+                    armour: armour,
+                    evasion: evasion,
+                    energyShield: energyShield,
+                    dpsTotal: dpsTotal,
+                    dpsPhys: dpsPhys,
+                    dpsElem: dpsElem);
             }
             catch (HttpRequestException ex) when (!searchByType && ex.Message.Contains("400"))
             {
@@ -695,13 +907,45 @@ public class MainViewModel : INotifyPropertyChanged
                     searchTerm,
                     PriceCheckerPoeSessionId,
                     searchByType: searchByType,
+                    baseType: baseTypeValue,
                     itemLevel: itemLevel,
                     rarity: rarity,
                     selectedMods: selectedMods,
-                    isExactSearch: isExactSearch);
+                    isExactSearch: isExactSearch,
+                    quality: quality,
+                    corrupted: corrupted,
+                    identified: identified,
+                    armour: armour,
+                    evasion: evasion,
+                    energyShield: energyShield,
+                    dpsTotal: dpsTotal,
+                    dpsPhys: dpsPhys,
+                    dpsElem: dpsElem);
             }
 
             AppLogger.Instance.Info($"搜索结果：total={searchResult.Total}, ids={searchResult.ResultIds.Count}");
+
+            // 带词缀搜索返回 0 结果时，自动回退到不带词缀搜索（仅 name+type 或 type）。
+            // 规避 stat ID 选错（多候选时 PickStatByCategory 取首个可能不正确）或挂单稀少导致搜不到。
+            // if (searchResult.ResultIds.Count == 0 && selectedMods != null && selectedMods.Count > 0)
+            // {
+            //     AppLogger.Instance.Info($"带词缀搜索 0 结果（{selectedMods.Count} 个词缀），回退到不带词缀搜索重试");
+            //     searchResult = await _tradeService.SearchAsync(
+            //         PriceCheckerLeague,
+            //         searchTerm,
+            //         PriceCheckerPoeSessionId,
+            //         searchByType: searchByType,
+            //         baseType: baseTypeValue,
+            //         itemLevel: itemLevel,
+            //         rarity: rarity,
+            //         selectedMods: null,
+            //         isExactSearch: isExactSearch,
+            //         quality: quality,
+            //         corrupted: corrupted,
+            //         identified: identified);
+            //     AppLogger.Instance.Info($"回退搜索结果：total={searchResult.Total}, ids={searchResult.ResultIds.Count}");
+            // }
+
             if (searchResult.ResultIds.Count == 0)
             {
                 vm.ShowError("未找到该物品的市集挂单");
@@ -728,7 +972,7 @@ public class MainViewModel : INotifyPropertyChanged
             var totalPages = (int)Math.Ceiling(searchResult.ResultIds.Count / (double)PriceOverlayViewModel.PageSize);
             vm.ShowResults(
                 $"共 {searchResult.Total} 条结果，第 1/{totalPages} 页，本页 {listings.Count} 条",
-                listings.OrderBy(l => l.Amount));
+                listings);
         }
         catch (Exception ex)
         {
@@ -766,7 +1010,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         var totalPages = (int)Math.Ceiling(vm.AllResultIds.Count / (double)PriceOverlayViewModel.PageSize);
         vm.ResultSummary = $"共 {vm.AllResultIds.Count} 条结果，第 {newPage + 1}/{totalPages} 页，本页 {listings.Count} 条";
-        vm.UpdatePageResults(listings.OrderBy(l => l.Amount), newPage);
+        vm.UpdatePageResults(listings, newPage);
     }
 
     /// <summary>
@@ -809,26 +1053,92 @@ public class MainViewModel : INotifyPropertyChanged
         var info = GameModeDetector.Detect(GameDirectory);
         DetectedGameMode = info.IsValid ? info.DisplayName : (string.IsNullOrWhiteSpace(info.ErrorMessage) ? "未检测" : info.ErrorMessage);
 
-        // 区服变化时重建价格/交易服务，并同步默认赛季。
+        // 区服变化时重建价格/交易服务。
         var newIsChina = !info.IsValid || info.IsChina;
-        if (newIsChina != _isChinaServer)
+        var serverChanged = newIsChina != _isChinaServer;
+        if (serverChanged)
         {
             _isChinaServer = newIsChina;
             RebuildPriceAndTradeServices();
-
-            // 未自定义赛季时，切换区服自动更新默认赛季名。
-            var defaultLeague = newIsChina ? "奥杜尔秘符" : "Runes of Aldur";
-            if (string.IsNullOrWhiteSpace(PriceCheckerLeague) ||
-                PriceCheckerLeague == "奥杜尔秘符" ||
-                PriceCheckerLeague == "Runes of Aldur")
-            {
-                PriceCheckerLeague = defaultLeague;
-            }
-
             PriceDataSourceLabel = _priceService.DataSourceLabel;
             OnPropertyChanged(nameof(PricePageTitle));
             OnPropertyChanged(nameof(IsChinaServer));
+        }
+
+        // 始终校验赛季名与区服是否匹配，避免启动时 saved league 与当前区服不一致。
+        // 国服赛季名是中文（如"奥杜尔秘符"），国际服是英文（如"Runes of Aldur"）。
+        // 默认留空，由 ValidateLeagueAsync 从 API 获取后选 leagues[0]（当前赛季，人数最多）。
+        if (string.IsNullOrWhiteSpace(PriceCheckerLeague) ||
+            PriceCheckerLeague == "永久" ||
+            PriceCheckerLeague == "永久（专家）" ||
+            PriceCheckerLeague == "Standard" ||
+            PriceCheckerLeague == "Hardcore")
+        {
+            PriceCheckerLeague = "";
+        }
+        else if (serverChanged)
+        {
+            // 区服切换且用户有自定义赛季名时，记录日志。
+            AppLogger.Instance.Info($"区服切换，保留用户自定义赛季：{PriceCheckerLeague}");
+        }
+
+        if (serverChanged)
+        {
             AppLogger.Instance.Info($"区服切换：IsChina={_isChinaServer}, DataSource={PriceDataSourceLabel}, League={PriceCheckerLeague}");
+        }
+        else
+        {
+            AppLogger.Instance.Info($"区服检测：IsChina={_isChinaServer}, League={PriceCheckerLeague}");
+        }
+    }
+
+    /// <summary>
+    /// 从交易 API 获取赛季列表，校正当前赛季名。
+    /// 如果当前赛季不在列表中，自动切换到第一个赛季（当前临时赛季）。
+    /// 参考 xiletrade-master 的 DataUpdaterService.LeaguesUpdate。
+    /// </summary>
+    private async Task ValidateLeagueAsync()
+    {
+        try
+        {
+            var leagues = await _tradeService.GetLeaguesAsync();
+            if (leagues.Count == 0)
+            {
+                AppLogger.Instance.Warn("获取赛季列表为空，保持当前赛季设置");
+                return;
+            }
+
+            // 在 UI 线程更新可用赛季列表，供下拉框绑定。
+            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            {
+                AvailableLeagues.Clear();
+                foreach (var lg in leagues)
+                {
+                    AvailableLeagues.Add(lg);
+                }
+            });
+
+            // 如果当前赛季不在列表中，或为永久服（玩家人数少），自动切换到第一个赛季（当前赛季）。
+            var permanentLeagues = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "永久", "永久（专家）", "Standard", "Hardcore"
+            };
+            if (string.IsNullOrWhiteSpace(PriceCheckerLeague) ||
+                !leagues.Contains(PriceCheckerLeague) ||
+                permanentLeagues.Contains(PriceCheckerLeague))
+            {
+                var oldLeague = PriceCheckerLeague;
+                PriceCheckerLeague = leagues[0];
+                AppLogger.Instance.Info($"赛季默认选择第0个：'{oldLeague}' → '{leagues[0]}'（可用赛季：{string.Join(", ", leagues)}）");
+            }
+            else
+            {
+                AppLogger.Instance.Info($"赛季名验证通过：{PriceCheckerLeague}（可用赛季：{string.Join(", ", leagues)}）");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Warn($"获取赛季列表异常：{ex.Message}");
         }
     }
 
@@ -856,6 +1166,12 @@ public class MainViewModel : INotifyPropertyChanged
         PriceDataSourceLabel = _priceService.DataSourceLabel;
         OnPropertyChanged(nameof(PricePageTitle));
         OnPropertyChanged(nameof(IsChinaServer));
+
+        // 启动时若已有 POESESSID，后台预加载 stats 数据，避免首次查价时阻塞。
+        if (!string.IsNullOrWhiteSpace(PriceCheckerPoeSessionId))
+        {
+            _ = _tradeService.PreloadStatsAsync(PriceCheckerPoeSessionId);
+        }
     }
 
     /// <summary>

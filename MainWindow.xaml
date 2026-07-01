@@ -318,7 +318,6 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -345,19 +344,38 @@
                             </DockPanel>
 
                             <TextBlock Grid.Row="3" Grid.Column="0" Text="目标赛季：" VerticalAlignment="Center" Margin="0,0,10,5"/>
-                            <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PriceCheckerLeague, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,5"/>
+                            <ComboBox Grid.Row="3" Grid.Column="1"
+                                      ItemsSource="{Binding AvailableLeagues}"
+                                      Text="{Binding PriceCheckerLeague, UpdateSourceTrigger=PropertyChanged}"
+                                      IsEditable="True"
+                                      VerticalContentAlignment="Center"
+                                      Margin="0,0,0,5"
+                                      ToolTip="从 API 获取的可用赛季列表，可手动输入或选择"/>
 
                             <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Text="点击「浏览器登录」打开内置浏览器，登录国服市集后自动获取 POESESSID。" Foreground="Gray" TextWrapping="Wrap"/>
 
-                            <Button Grid.Row="5" Grid.ColumnSpan="2" Content="测试查价器（猎首腰带）"
-                                    Command="{Binding TestPriceCheckerCommand}"
-                                    Padding="10,5" Margin="0,8,0,0" HorizontalAlignment="Left"
-                                    ToolTip="使用内置的猎首腰带文本模拟查价流程，测试登录和搜索是否正常"/>
-
-                            <Button Grid.Row="6" Grid.ColumnSpan="2" Content="测试查价器（精工箭袋-未鉴定传奇）"
-                                    Command="{Binding TestPriceCheckerQuiverCommand}"
-                                    Padding="10,5" Margin="0,8,0,0" HorizontalAlignment="Left"
-                                    ToolTip="使用内置的精工箭袋文本模拟查价流程，测试未鉴定传奇物品按基底搜索回退是否正常"/>
+                            <WrapPanel Grid.Row="5" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                                <Button Content="猎首腰带"
+                                        Command="{Binding TestPriceCheckerCommand}"
+                                        Padding="10,5" Margin="0,0,6,0"
+                                        ToolTip="使用内置的猎首腰带文本模拟查价流程，测试登录和搜索是否正常"/>
+                                <Button Content="精工箭袋"
+                                        Command="{Binding TestPriceCheckerQuiverCommand}"
+                                        Padding="10,5" Margin="0,0,6,0"
+                                        ToolTip="使用内置的精工箭袋文本模拟查价流程，测试未鉴定传奇物品按基底搜索回退是否正常"/>
+                                <Button Content="苍穹裂片"
+                                        Command="{Binding TestPriceCheckerSpearCommand}"
+                                        Padding="10,5" Margin="0,0,6,0"
+                                        ToolTip="使用内置的苍穹裂片（飞翼长矛）文本模拟查价流程，测试传奇武器属性解析是否正常"/>
+                                <Button Content="仪式通道"
+                                        Command="{Binding TestPriceCheckerCharmCommand}"
+                                        Padding="10,5" Margin="0,0,6,0"
+                                        ToolTip="使用内置的仪式通道（黄金咒符）文本模拟查价流程，测试咒符类物品解析是否正常"/>
+                                <Button Content="祸害 魔甲"
+                                        Command="{Binding TestPriceCheckerArmourCommand}"
+                                        Padding="10,5" Margin="0,0,6,0"
+                                        ToolTip="使用内置的祸害魔甲（滑击背心）文本模拟查价流程，测试稀有护甲的品质/前缀/后缀/打造词缀解析与搜索是否正常"/>
+                            </WrapPanel>
                         </Grid>
                     </GroupBox>
 

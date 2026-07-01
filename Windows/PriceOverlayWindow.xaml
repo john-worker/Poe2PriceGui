@@ -269,77 +269,79 @@
                                                    ToolTipService.InitialShowDelay="0"
                                                    ToolTipService.ShowDuration="60000">
                                             <TextBlock.ToolTip>
-                                                <ToolTip Background="#FF0F0F1A"
-                                                         BorderBrush="#FF4A4A5E"
+                                                <ToolTip Background="#FF0F0F0F"
+                                                         BorderBrush="#FF383838"
                                                          BorderThickness="1"
                                                          Padding="10,8"
                                                          MaxWidth="380">
+                                                    <!-- 参考 xiletrade ResultItem 配色，保持我们居中风格 -->
                                                     <StackPanel>
-                                                        <!-- 物品名称 -->
+                                                        <!-- 物品名称（稀有度配色） -->
                                                         <TextBlock Text="{Binding ItemDetail.Name}"
                                                                    FontSize="14"
                                                                    FontWeight="Bold"
-                                                                   Foreground="{Binding ItemDetail.IsUnique, Converter={StaticResource RarityColorConverter}}"
+                                                                   Foreground="{Binding ItemDetail.Rarity, Converter={StaticResource RarityColorConverter}}"
                                                                    TextWrapping="Wrap"
                                                                    TextAlignment="Center"
                                                                    Visibility="{Binding ItemDetail.Name, Converter={StaticResource NonEmptyToVisConverter}}"/>
-                                                        <!-- 基底类型 -->
+                                                        <!-- 基底类型（稀有度配色） -->
                                                         <TextBlock Text="{Binding ItemDetail.TypeLine}"
                                                                    FontSize="13"
-                                                                   Foreground="{Binding ItemDetail.IsUnique, Converter={StaticResource RarityColorConverter}}"
+                                                                   Foreground="{Binding ItemDetail.Rarity, Converter={StaticResource RarityColorConverter}}"
                                                                    TextWrapping="Wrap"
                                                                    TextAlignment="Center"
                                                                    Margin="0,1,0,0"
                                                                    Visibility="{Binding ItemDetail.TypeLine, Converter={StaticResource NonEmptyToVisConverter}}"/>
 
-                                                        <!-- 属性区 -->
+                                                        <!-- 属性区（DescWebColor #7F7F7F） -->
                                                         <ItemsControl ItemsSource="{Binding ItemDetail.Properties}"
-                                                                      Margin="0,4,0,0">
+                                                                      Margin="0,4,0,0"
+                                                                      Visibility="{Binding ItemDetail.Properties.Count, Converter={StaticResource NonZeroToVisConverter}}">
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate>
                                                                     <TextBlock Text="{Binding}"
                                                                                FontSize="12"
-                                                                               Foreground="#FFCCCCCC"
+                                                                               Foreground="#FF7F7F7F"
                                                                                TextWrapping="Wrap"
                                                                                TextAlignment="Center"/>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>
 
-                                                        <!-- 分隔线 + 物品等级/需求 -->
-                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.ItemLevel, Converter={StaticResource NonZeroToVisConverter}}"/>
-                                                        <TextBlock FontSize="12" Foreground="#FFCCCCCC" TextAlignment="Center" Visibility="{Binding ItemDetail.ItemLevel, Converter={StaticResource NonZeroToVisConverter}}">
-                                                            <Run Text="物品等级: "/><Run Text="{Binding ItemDetail.ItemLevel}" Foreground="#FFFFFFFF"/>
+                                                        <!-- 分隔线 + 物品等级/需求/插槽 -->
+                                                        <Separator Background="#FF383838" Margin="0,4" Visibility="{Binding ItemDetail.ItemLevel, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <TextBlock FontSize="12" Foreground="#FF7F7F7F" TextAlignment="Center" Visibility="{Binding ItemDetail.ItemLevel, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <Run Text="物品等级: "/><Run Text="{Binding ItemDetail.ItemLevel}" Foreground="White"/>
                                                         </TextBlock>
-                                                        <TextBlock FontSize="12" Foreground="#FFCCCCCC" TextAlignment="Center" Margin="0,1,0,0" Visibility="{Binding ItemDetail.Requirements.Count, Converter={StaticResource NonZeroToVisConverter}}">
-                                                            <Run Text="需求: "/><Run Text="{Binding ItemDetail.Requirements, Converter={StaticResource StringJoinConverter}}"/>
+                                                        <TextBlock FontSize="12" Foreground="#FF7F7F7F" TextAlignment="Center" Margin="0,1,0,0" Visibility="{Binding ItemDetail.Requirements.Count, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <Run Text="需求: "/><Run Text="{Binding ItemDetail.Requirements, Converter={StaticResource StringJoinConverter}}" Foreground="White"/>
                                                         </TextBlock>
-                                                        <TextBlock FontSize="12" Foreground="#FFCCCCCC" TextAlignment="Center" Margin="0,1,0,0" Visibility="{Binding ItemDetail.Sockets, Converter={StaticResource NonZeroToVisConverter}}">
-                                                            <Run Text="插槽: "/><Run Text="{Binding ItemDetail.Sockets}" Foreground="#FFFFFFFF"/>
+                                                        <TextBlock FontSize="12" Foreground="#FF7F7F7F" TextAlignment="Center" Margin="0,1,0,0" Visibility="{Binding ItemDetail.Sockets, Converter={StaticResource NonZeroToVisConverter}}">
+                                                            <Run Text="插槽: "/><Run Text="{Binding ItemDetail.Sockets}" Foreground="White"/>
                                                         </TextBlock>
 
-                                                        <!-- 隐式属性 -->
-                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.ImplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <!-- 隐式属性（ModWebColor #E8DFE2） -->
+                                                        <Separator Background="#FF383838" Margin="0,4" Visibility="{Binding ItemDetail.ImplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
                                                         <ItemsControl ItemsSource="{Binding ItemDetail.ImplicitMods}" Visibility="{Binding ItemDetail.ImplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}">
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate>
-                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FF9999FF" TextWrapping="Wrap" TextAlignment="Center"/>
+                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FFE8DFE2" TextWrapping="Wrap" TextAlignment="Center"/>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>
 
-                                                        <!-- 显式属性 -->
-                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.ExplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <!-- 显式属性（ModWebColor #E8DFE2） -->
+                                                        <Separator Background="#FF383838" Margin="0,4" Visibility="{Binding ItemDetail.ExplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
                                                         <ItemsControl ItemsSource="{Binding ItemDetail.ExplicitMods}" Visibility="{Binding ItemDetail.ExplicitMods.Count, Converter={StaticResource NonZeroToVisConverter}}">
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate>
-                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FF8888FF" TextWrapping="Wrap" TextAlignment="Center"/>
+                                                                    <TextBlock Text="{Binding}" FontSize="12" Foreground="#FFE8DFE2" TextWrapping="Wrap" TextAlignment="Center"/>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>
 
-                                                        <!-- 打造属性 -->
-                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.CraftedMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
+                                                        <!-- 打造属性（EnchantAndCraftColor #B4B4FF） -->
+                                                        <Separator Background="#FF383838" Margin="0,4" Visibility="{Binding ItemDetail.CraftedMods.Count, Converter={StaticResource NonZeroToVisConverter}}"/>
                                                         <ItemsControl ItemsSource="{Binding ItemDetail.CraftedMods}" Visibility="{Binding ItemDetail.CraftedMods.Count, Converter={StaticResource NonZeroToVisConverter}}">
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate>
@@ -348,13 +350,13 @@
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>
 
-                                                        <!-- 已腐化 -->
-                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.Corrupted, Converter={StaticResource BoolToVis}}"/>
-                                                        <TextBlock Text="已腐化" FontSize="12" Foreground="#FFFF6B6B" TextAlignment="Center" Visibility="{Binding ItemDetail.Corrupted, Converter={StaticResource BoolToVis}}"/>
+                                                        <!-- 已腐化（CorruptedWebColor #D20000） -->
+                                                        <Separator Background="#FF383838" Margin="0,4" Visibility="{Binding ItemDetail.Corrupted, Converter={StaticResource BoolToVis}}"/>
+                                                        <TextBlock Text="已腐化" FontSize="12" Foreground="#FFD20000" TextAlignment="Center" Visibility="{Binding ItemDetail.Corrupted, Converter={StaticResource BoolToVis}}"/>
 
-                                                        <!-- 价格 -->
-                                                        <Separator Background="#FF3A3A4E" Margin="0,4" Visibility="{Binding ItemDetail.PriceText, Converter={StaticResource NonEmptyToVisConverter}}"/>
-                                                        <TextBlock Text="{Binding ItemDetail.PriceText}" FontSize="13" Foreground="#FFFFD700" FontWeight="SemiBold" TextAlignment="Center" Visibility="{Binding ItemDetail.PriceText, Converter={StaticResource NonEmptyToVisConverter}}"/>
+                                                        <!-- 价格（NoteWebColor #AA9E82，保持我们原有价格数据） -->
+                                                        <Separator Background="#FF383838" Margin="0,4" Visibility="{Binding ItemDetail.PriceText, Converter={StaticResource NonEmptyToVisConverter}}"/>
+                                                        <TextBlock Text="{Binding ItemDetail.PriceText}" FontSize="13" Foreground="#FFAA9E82" FontWeight="SemiBold" TextAlignment="Center" Visibility="{Binding ItemDetail.PriceText, Converter={StaticResource NonEmptyToVisConverter}}"/>
                                                     </StackPanel>
                                                 </ToolTip>
                                             </TextBlock.ToolTip>

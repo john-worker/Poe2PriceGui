@@ -28,6 +28,33 @@ public class ItemInfo
     /// <summary>插槽数量。</summary>
     public int SocketCount { get; set; }
 
+    /// <summary>品质（+20 → 20）。</summary>
+    public int Quality { get; set; }
+
+    /// <summary>护甲值（参考 xiletrade-master equipment_filters.filters.ar）。</summary>
+    public int Armour { get; set; }
+
+    /// <summary>闪避值（参考 xiletrade-master equipment_filters.filters.ev）。</summary>
+    public int Evasion { get; set; }
+
+    /// <summary>能量护盾（参考 xiletrade-master equipment_filters.filters.es）。</summary>
+    public int EnergyShield { get; set; }
+
+    /// <summary>每秒总伤害（参考 xiletrade-master equipment_filters.filters.dps）。</summary>
+    public int DpsTotal { get; set; }
+
+    /// <summary>每秒物理伤害（参考 xiletrade-master equipment_filters.filters.pdps）。</summary>
+    public int DpsPhys { get; set; }
+
+    /// <summary>每秒元素伤害（参考 xiletrade-master equipment_filters.filters.edps）。</summary>
+    public int DpsElem { get; set; }
+
+    /// <summary>是否已腐化。</summary>
+    public bool Corrupted { get; set; }
+
+    /// <summary>是否已鉴定。</summary>
+    public bool Identified { get; set; } = true;
+
     /// <summary>解析出的词缀/属性列表。</summary>
     public ObservableCollection<ItemMod> Mods { get; set; } = [];
 
